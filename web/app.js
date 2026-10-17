@@ -3,6 +3,11 @@
 // Every conversation is about one index, chosen in the sidebar before the chat is
 // started. The index is sent with every message, so the first message is the
 // user's own question, with the repository overview already in context.
+//
+// Conversations live in IndexedDB (store.js), the record of every transcript. Each
+// conversation is a session workflow on the server, which keeps only the recent
+// context; each message carries the newest messages within the context budget, and
+// `resync` replaces the server's copy when it may differ (after a stop or a failure).
 (() => {
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -14,20 +19,35 @@
     reportDownload: $("report-download"), compassOpen: $("compass-open"), temporalLink: $("temporal-ui-link"),
   };
 
-  // ---- storage (per-browser; every access guarded) ----
-  const KEY = "code-atlas:conversations:v1";
+  // ---- storage ----
+  // Conversations are in IndexedDB (ChatStore); localStorage keeps only the selected
+  // index, and is read once for conversations saved by earlier versions (LEGACY_KEY).
+  const LEGACY_KEY = "code-atlas:conversations:v1";
   const REPO_KEY = "code-atlas:selected-index";
-  const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state.conversations)); } catch { /* quota/private mode */ } };
   const loadSelected = () => { try { return localStorage.getItem(REPO_KEY) || ""; } catch { return ""; } };
   const saveSelected = (v) => { try { localStorage.setItem(REPO_KEY, v); } catch { /* ignore */ } };
 
   const state = {
-    conversations: load(), activeId: null, streaming: false, controller: null,
+    conversations: [], activeId: null, streaming: false, controller: null, turnId: null,
     repos: new Map(), reposLoaded: false, repoIds: "", selected: loadSelected(), view: "chat",
     // The loaded report: {repo, payload, markdown (fetched on first use), mode: "summary" | "detailed"}.
     report: null,
+    storageOk: true, storageWarning: "", chatContextChars: 240000,
   };
+
+  const showStorageWarning = (text) => {
+    state.storageWarning = text;
+    els.banner.hidden = false; els.banner.textContent = text;
+  };
+  // Saves never throw: a full or blocked store shows the banner and the chat goes on.
+  const persist = (c) => (state.storageOk ? ChatStore.put(c) : Promise.resolve())
+    .catch(() => showStorageWarning("Could not save this conversation (browser storage full or blocked)."));
+
+  // Ids are UUIDs (the server's session and turn ids). crypto.randomUUID needs a secure
+  // context (https or localhost); getRandomValues works over plain http too.
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
+    : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (ch) =>
+      (ch ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (ch / 4)))).toString(16)));
 
   // ---- clipboard ----
   // navigator.clipboard needs a secure context (https or localhost); the fallback covers
@@ -77,28 +97,51 @@
   const retitle = (c) => { const q = firstQuestion(c); c.title = q ? shorten(q) : "New chat"; };
 
   const newConversation = (repo) => {
-    const c = { id: String(Date.now()), v: 2, repo, title: "New chat", messages: [] };
-    state.conversations.unshift(c); state.activeId = c.id; save(); return c;
+    const c = { id: uuid(), v: 2, repo, title: "New chat", messages: [], updated: Date.now() };
+    state.conversations.unshift(c); state.activeId = c.id; persist(c); return c;
   };
+
+  // Conversations saved in localStorage by earlier versions: copied into IndexedDB once,
+  // with new UUID ids (the old ids were timestamps), then the old key is removed. Data
+  // that cannot be parsed or copied stays where it is.
+  function legacyConversations() {
+    let raw = null;
+    try { raw = localStorage.getItem(LEGACY_KEY); } catch { return null; }
+    if (!raw) return null;
+    try {
+      const list = JSON.parse(raw);
+      return Array.isArray(list) ? list.map((c) => ({ ...c, id: uuid(), updated: c.updated || Number(c.id) || Date.now() })) : null;
+    } catch { return null; }
+  }
+
+  async function importLegacy() {
+    const list = legacyConversations();
+    if (!list) return;
+    if ((await ChatStore.loadAll()).length > 0) return;  // never overwrite; the key stays
+    await ChatStore.putAll(list);
+    try { localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }  // only after the copy succeeded
+  }
 
   // Conversations saved before indexes were chosen up front opened with a bare
   // index name as their first message: recover the index from it and drop it,
   // with the model's reply to it, so the title comes from the first real question.
   // Runs once per conversation (v: 2 marks conversations in the current shape).
-  state.conversations.forEach((c) => {
-    if (c.v === 2) return;
-    const first = c.messages[0];
-    if (first && first.role === "user" && /^[A-Za-z0-9_-]{1,64}$/.test(first.content.trim())) {
-      c.repo = first.content.trim();
-      c.messages = c.messages.slice(c.messages[1]?.role === "assistant" ? 2 : 1);
-    } else if (!c.repo) {
-      c.repo = null;  // unknown: it can be read but not continued
-    }
-    delete c.titled;
-    c.v = 2;
-    retitle(c);
-  });
-  save();
+  function migrateShapes() {
+    state.conversations.forEach((c) => {
+      if (c.v === 2) return;
+      const first = c.messages[0];
+      if (first && first.role === "user" && /^[A-Za-z0-9_-]{1,64}$/.test(first.content.trim())) {
+        c.repo = first.content.trim();
+        c.messages = c.messages.slice(c.messages[1]?.role === "assistant" ? 2 : 1);
+      } else if (!c.repo) {
+        c.repo = null;  // unknown: it can be read but not continued
+      }
+      delete c.titled;
+      c.v = 2;
+      retitle(c);
+      persist(c);
+    });
+  }
 
   function renderSidebar() {
     els.convs.innerHTML = "";
@@ -116,7 +159,10 @@
         if (state.streaming) return;
         state.conversations = state.conversations.filter((x) => x.id !== c.id);
         if (state.activeId === c.id) state.activeId = state.conversations[0]?.id ?? null;
-        save(); renderAll();
+        if (state.storageOk) ChatStore.remove(c.id).catch(() => {});
+        // End the server-side session (fire and forget; it also ends on its own when idle).
+        if (c.repo) fetch(`/api/chat/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.id)}`, { method: "DELETE" }).catch(() => {});
+        renderAll();
       };
       li.append(text, del);
       li.onclick = () => { if (!state.streaming) { state.activeId = c.id; renderAll(); } };
@@ -373,25 +419,48 @@ ${clone.outerHTML}
     if (!on && !els.input.disabled) els.input.focus();
   }
 
+  // The newest messages within the context budget, starting on a user message: the
+  // same rule as the server's trim_to_budget (chat/context.py).
+  const takeTail = (messages, budget) => {
+    const kept = []; let used = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const n = messages[i].content.length;
+      if (kept.length && used + n > budget) break;
+      kept.unshift(messages[i]); used += n;
+    }
+    while (kept.length > 1 && kept[0].role !== "user") kept.shift();
+    return kept.map(({ role, content }) => ({ role, content }));
+  };
+
   async function ask(text) {
     text = text.trim();
     const c = active();
     if (!text || state.streaming || !c || !c.repo) return;
+    const turnId = uuid();
+    const prior = c.messages.slice();  // before the new message
     c.messages.push({ role: "user", content: text });
+    c.pending = { turn_id: turnId, at: Date.now() };
     retitle(c);
-    save(); renderAll(); els.input.value = ""; autosize();
+    await persist(c);
+    renderAll(); els.input.value = ""; autosize();
+    const tail = takeTail(prior, state.chatContextChars);
 
     const bubble = addRow("assistant", "");
     bubble.classList.add("typing");
     let answer = ""; let frame = null;
+    let stopped = false, failed = false, aborted = false;
     const flush = () => { frame = null; render(bubble, answer); els.messages.scrollTop = els.messages.scrollHeight; };
 
     setStreaming(true);
-    state.controller = new AbortController();
+    state.controller = new AbortController(); state.turnId = turnId;
     try {
       const res = await fetch("/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo_id: c.repo, messages: c.messages }), signal: state.controller.signal,
+        body: JSON.stringify({
+          repo_id: c.repo, session_id: c.id, turn_id: turnId, prior_count: prior.length, resync: !!c.resync,
+          messages: [...tail, { role: "user", content: text }],
+        }),
+        signal: state.controller.signal,
       });
       if (!res.ok) {
         let detail = `Server returned ${res.status}`;
@@ -407,25 +476,50 @@ ${clone.outerHTML}
         let idx;
         while ((idx = buf.indexOf("\n\n")) !== -1) {
           const frameText = buf.slice(0, idx); buf = buf.slice(idx + 2);
-          if (!frameText.startsWith("data: ")) continue;
+          if (!frameText.startsWith("data: ")) continue;  // also skips ": keepalive" comments
           const data = frameText.slice(6);
           if (data === "[DONE]") continue;
           const chunk = JSON.parse(data);
           if (typeof chunk === "string") answer += chunk;
-          else if (chunk && chunk.error) answer += `\n\n**Error:** ${chunk.error}`;
+          else if (chunk && chunk.reset) answer = "";  // a retry restarted the answer
+          else if (chunk && chunk.stopped) stopped = true;
+          else if (chunk && chunk.error) { answer += `\n\n**Error:** ${chunk.error}`; failed = true; }
           if (!frame) frame = setTimeout(flush, 80);
         }
       }
     } catch (e) {
-      if (e.name !== "AbortError") answer += `\n\n**Error:** ${e.message}`;
-      else answer += "\n\n_(stopped)_";
+      if (e.name === "AbortError") aborted = true;
+      else { answer += `\n\n**Error:** ${e.message}`; failed = true; }
     } finally {
       if (frame) clearTimeout(frame);
-      bubble.classList.remove("typing"); render(bubble, answer || "_(no response)_");
-      bubble.source = answer || "(no response)";
-      c.messages.push({ role: "assistant", content: answer || "(no response)" });
-      save(); setStreaming(false); renderSidebar();
+      let final = answer;
+      if (stopped || aborted) final = (answer ? `${answer}\n\n` : "") + "_(stopped)_";
+      if (!final) { final = "(no response)"; failed = true; }
+      bubble.classList.remove("typing"); render(bubble, final);
+      bubble.source = final;
+      c.messages.push({ role: "assistant", content: final });
+      c.pending = null;
+      // The server's context differs after a stop or failure: the next message replaces it.
+      c.resync = stopped || failed || aborted;
+      await persist(c);
+      state.turnId = null;
+      setStreaming(false); renderSidebar();
       els.messages.scrollTop = els.messages.scrollHeight;
+    }
+  }
+
+  // Stop asks the server to cancel the turn; its stream then ends with {stopped}. The
+  // request is aborted only if the stop itself fails.
+  async function stopTurn() {
+    const c = active();
+    if (!state.streaming || !c || !state.turnId) return;
+    try {
+      const res = await fetch(`/api/chat/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.id)}/stop`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ turn_id: state.turnId }),
+      });
+      if (!res.ok) throw new Error(`stop returned ${res.status}`);
+    } catch {
+      if (state.controller) state.controller.abort();
     }
   }
 
@@ -512,6 +606,7 @@ ${clone.outerHTML}
       const c = await (await fetch("/api/config")).json();
       if (c.temporal_ui_url) temporal.url = c.temporal_ui_url.replace(/\/$/, "");
       if (c.temporal_namespace) temporal.namespace = c.temporal_namespace;
+      if (c.chat_context_chars) state.chatContextChars = c.chat_context_chars;
     } catch { /* keep the fallback link */ }
     renderTemporalLink();
   }
@@ -537,6 +632,9 @@ ${clone.outerHTML}
       const problems = [];
       if (!h.api_key_configured) problems.push("ANTHROPIC_API_KEY is not set in .env");
       if (h.database !== "ok") problems.push(`Database ${h.database}`);
+      if (h.temporal && h.temporal !== "ok") problems.push(`Temporal ${h.temporal}`);
+      if (h.redis && h.redis !== "ok") problems.push(`Redis ${h.redis}`);
+      if (state.storageWarning) problems.push(state.storageWarning);
       els.banner.hidden = problems.length === 0; els.banner.textContent = problems.join(". ");
     } catch {
       if (seq !== healthSeq) return;
@@ -552,7 +650,7 @@ ${clone.outerHTML}
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); els.form.requestSubmit(); }
   });
   els.form.addEventListener("submit", (e) => { e.preventDefault(); ask(els.input.value); });
-  els.stop.addEventListener("click", () => state.controller && state.controller.abort());
+  els.stop.addEventListener("click", stopTurn);
   els.reportToggle.addEventListener("click", () => {
     if (state.view === "report") { showChat(); renderMessages(); renderComposer(); }
     else if (!state.streaming) showReport();
@@ -567,23 +665,38 @@ ${clone.outerHTML}
     renderRepoSelect();
     // A chat with no messages yet follows the selection; a started chat keeps its index.
     const c = active();
-    if (c && c.messages.length === 0 && state.selected) { c.repo = state.selected; save(); renderAll(); }
+    if (c && c.messages.length === 0 && state.selected) { c.repo = state.selected; persist(c); renderAll(); }
     else renderComposer();
   });
   els.newChat.addEventListener("click", () => {
     if (state.streaming || !state.selected) return;
     const c = active();
-    if (c && c.messages.length === 0) { c.repo = state.selected; save(); }  // reuse an empty chat
+    if (c && c.messages.length === 0) { c.repo = state.selected; persist(c); }  // reuse an empty chat
     else newConversation(state.selected);
     renderAll(); els.input.focus();
   });
 
-  state.activeId = state.conversations[0]?.id ?? null;
-  renderAll(); renderRepoSelect(); loadRepos(); loadHealth(); loadConfig();
-  setInterval(loadRepos, 30000);
-  setInterval(loadHealth, 5 * 60 * 1000);
   els.docsStatus.addEventListener("click", () => {
     els.docsStatus.className = "docs-status checking";
     loadHealth(true);
   });
+
+  (async () => {
+    state.storageOk = await ChatStore.available();
+    if (state.storageOk) {
+      await ChatStore.persist();
+      try { await importLegacy(); } catch { /* the legacy key stays for the next load */ }
+      try { state.conversations = await ChatStore.loadAll(); } catch { state.storageOk = false; }
+    }
+    if (!state.storageOk) {
+      // No IndexedDB (or it failed): work in memory, showing older conversations read-only from localStorage.
+      state.conversations = legacyConversations() || [];
+      showStorageWarning("Conversations will not be saved in this browser session.");
+    }
+    migrateShapes();
+    state.activeId = state.conversations[0]?.id ?? null;
+    renderAll(); renderRepoSelect(); loadRepos(); loadHealth(); loadConfig();
+    setInterval(loadRepos, 30000);
+    setInterval(loadHealth, 5 * 60 * 1000);
+  })();
 })();

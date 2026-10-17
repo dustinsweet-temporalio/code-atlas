@@ -443,7 +443,7 @@ async def chat(request: ChatRequest):
     prior = request.messages[:-1]
     if len(text) > C.MAX_TEXT_CHARS:
         return JSONResponse({"error": f"The message is longer than {C.MAX_TEXT_CHARS:,} characters."}, status_code=400)
-    if sum(len(m.content) for m in prior) > CHAT_CONTEXT_CHARS:
+    if len(prior) > 1 and sum(len(m.content) for m in prior) > CHAT_CONTEXT_CHARS:  # one message is always kept
         return JSONResponse({"error": "The conversation sent is larger than the context budget."}, status_code=400)
 
     # Reject an unknown index before any model call.

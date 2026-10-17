@@ -99,11 +99,17 @@ def test_request_validation(api):
     r = client.post("/api/chat", json=body(messages=[{"role": "user", "content": "q"},
                                                      {"role": "assistant", "content": "a"}]))
     assert r.status_code == 400 and "user" in r.json()["error"]
-    big = [{"role": "user", "content": "x" * (app_module.CHAT_CONTEXT_CHARS + 1)}, {"role": "user", "content": "q"}]
+    half = "x" * (app_module.CHAT_CONTEXT_CHARS // 2 + 1)
+    big = [{"role": "user", "content": half}, {"role": "assistant", "content": half}, {"role": "user", "content": "q"}]
     assert client.post("/api/chat", json=body(messages=big)).status_code == 400
     too_long = [{"role": "user", "content": "x" * (C.MAX_TEXT_CHARS + 1)}]
     assert client.post("/api/chat", json=body(messages=too_long, prior_count=0)).status_code == 400
     assert temporal.calls == []
+
+    # One older message over the budget is a valid tail (the newest message is always kept).
+    temporal.script = [([], result("a"))]
+    one = [{"role": "assistant", "content": "x" * (app_module.CHAT_CONTEXT_CHARS + 1)}, {"role": "user", "content": "q"}]
+    assert client.post("/api/chat", json=body(messages=one, prior_count=1)).status_code == 200
 
 
 def test_the_update_with_start_request(api):
