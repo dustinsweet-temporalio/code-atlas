@@ -185,3 +185,29 @@ dl.facts dd { margin: 0; }
   .score-row { grid-template-columns: 1fr 70px 26px; } .score-row .reason { grid-column: 1 / -1; }
   dl.facts { grid-template-columns: 1fr; } .element { grid-template-columns: 1fr; } .element .from { grid-column: auto; }
 }
+
+/* ---- report view switch and download (chat header) ---- */
+.report-actions { display: inline-flex; align-items: center; gap: 8px; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; position: relative; }
+.seg button:first-child { border-radius: 8px 0 0 8px; }
+.seg button:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+.seg button[aria-pressed="true"] { background: var(--user); color: var(--accent); border-color: var(--accent); z-index: 1; }
+
+/* ---- detailed report (the full Markdown document) ---- */
+.md-report { font-size: 14.5px; overflow-wrap: break-word; }
+.md-report h1 { margin-top: 0; }
+.md-report h2 { font-size: 20px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 34px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.md-report h3 { font-size: 17px; margin: 26px 0 8px; }
+.md-report h4 { font-size: 15px; }
+.md-report table { border-collapse: collapse; display: block; overflow-x: auto; margin: 10px 0 14px; font-size: 13.5px; }
+.md-report th, .md-report td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; vertical-align: top; }
+.md-report td { min-width: 6em; }
+.md-report td code { overflow-wrap: anywhere; }
+.md-report th { background: var(--panel); }
+.md-report blockquote { margin: 10px 0; padding: 6px 12px; border-left: 3px solid var(--warn); color: var(--muted); }
+.md-report a { color: var(--accent); }
+.md-report ul, .md-report ol { display: block; list-style: revert; margin: 8px 0 12px; padding-left: 22px; }
+.md-report li + li { margin-top: 3px; }
+.md-report pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; position: relative; }
+.md-report pre code { display: block; padding: 12px 14px; overflow-x: auto; border: 0; background: transparent; }

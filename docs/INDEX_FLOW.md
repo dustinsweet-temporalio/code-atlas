@@ -48,7 +48,7 @@ Source: `semantic_ingress/semantic_ingress/lens/` (`pack.py`, `normalize.py`, `r
 
 With the lens on, `sync` runs these steps after the index is saved and the source mirrored, and stores the report in the `reports` collection (a failure keeps the last good report and never fails the index). Each model step is cached in `report_cache`, keyed on its inputs: lead verdicts on the file's blob, each process's scores and write-up on its card, the verified gates and the rubric, pack, model and prompt versions. Incremental runs keep the process list stable: the repository lens pass sees the previous processes and the changed files.
 
-In chat, `get_temporal_report` reads the stored report (overview, one process, or the evaluation) and `search_temporal_docs` searches the Temporal docs; the system prompt states whether a report exists and its headline verdicts. The UI's report view reads `/api/report/<name>`.
+In chat, `get_temporal_report` reads the stored report (overview, one process, or the evaluation) and `search_temporal_docs` searches the Temporal docs; the system prompt states whether a report exists and its headline verdicts. The UI's report view reads `/api/report/<name>`, and its detailed report reads `/api/report/<name>/markdown` (the stored Markdown).
 
 Source: `semantic_ingress/semantic_ingress/report/`.
 
