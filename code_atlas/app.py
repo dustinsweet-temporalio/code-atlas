@@ -11,6 +11,8 @@ Serves the chat UI and a small API:
     GET  /api/compass/{repo_id}  the Compass Web URL that opens this index's database
     POST /api/chat     streaming (SSE) answer for a conversation about one index ({repo_id, messages})
 
+Indexing from the UI (pick a folder, check, sync, follow progress, delete) is in indexing.py.
+
 Run with: uvicorn app:app --host 0.0.0.0 --port 8080
 """
 import json
@@ -40,6 +42,7 @@ from config import (
     REPORTS_COLLECTION,
     SOURCE_DIR,
 )
+from indexing import router as indexing_router, ui_settings as indexing_settings
 from utils.mongo import get_mongo_client
 from utils.formatters.lens import index_lens_info
 from utils.validation import validate_repository
@@ -50,6 +53,7 @@ logger = logging.getLogger("code_atlas.app")
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent.parent / "web"))
 
 app = FastAPI(title="Code Atlas", docs_url=None, redoc_url=None)
+app.include_router(indexing_router)
 
 
 @app.middleware("http")
@@ -98,10 +102,11 @@ def health(recheck: bool = False):
 
 @app.get("/api/config")
 def ui_config():
-    """Settings the UI needs: where the Temporal UI (indexing runs) is, as the browser reaches it."""
+    """Settings the UI needs: where the Temporal UI (indexing runs) is, as the browser reaches it, and indexing."""
     return {
         "temporal_ui_url": os.environ.get("TEMPORAL_UI_URL", "").strip() or "http://localhost:8233",
         "temporal_namespace": os.environ.get("TEMPORAL_NAMESPACE", "").strip() or "default",
+        **indexing_settings(),
     }
 
 
@@ -117,6 +122,7 @@ def list_repos():
                 continue
             db = client[db_name]
             info = index_lens_info(db)
+            meta = db[INDEX_META_COLLECTION].find_one({}, {"repo_path": 1, "commit_sha": 1}) or {}
             repos.append({
                 "repo_id": db_name[len(prefix):],
                 "files": db[FILE_SUMMARIES_COLLECTION].estimated_document_count(),
@@ -126,6 +132,8 @@ def list_repos():
                 "lens": info["lens"],
                 "indexed_at": info["indexed_at"],
                 "prompt_versions": info["prompt_versions"],
+                "repo_path": meta.get("repo_path"),
+                "commit_sha": meta.get("commit_sha"),
             })
         return {"repos": repos}
     except Exception as e:

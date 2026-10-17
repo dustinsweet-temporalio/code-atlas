@@ -2,12 +2,12 @@
 #
 #   cp .env.example .env      # then set ANTHROPIC_API_KEY
 #   docker compose up --build
-#   ./scripts/index.sh /path/to/a/git/repo [name]
 #
-# Open http://localhost:8090 (Compass Web, for browsing the stored indexes: http://localhost:8096)
-# and http://localhost:8233 (Temporal UI: indexing runs).
-# Indexing (`sync`) runs as a Temporal workflow on the `temporal` dev server below;
-# re-running index.sh after a crash or Ctrl-C resumes it.
+# Open http://localhost:8090 and add a repository with "+ Add index" (or run
+# ./scripts/index.sh /path/to/a/git/repo [name]). Compass Web, for browsing the stored
+# indexes: http://localhost:8096. Temporal UI (indexing runs): http://localhost:8233.
+# Indexing (`sync`) runs as a Temporal workflow on the `temporal` dev server below: the
+# `worker` service runs the ones started from the UI; index.sh runs its own.
 
 x-app-env: &app-env
   MONGO_URL: mongodb://mongo:27017
@@ -19,6 +19,10 @@ x-app-env: &app-env
   # Compass Web, from inside the network (to look up its connection) and from the browser
   COMPASS_URL: http://compass:8080
   COMPASS_PUBLIC_URL: http://localhost:${COMPASS_PORT:-8096}
+  # Indexing from the UI: repositories under REPOS_ROOT (default: your home directory) are
+  # mounted read-only at the same path in the app and the worker, so host paths work as-is.
+  REPOS_ROOT: ${REPOS_ROOT:-${HOME}}
+  HOST_HOME: ${HOME}
 
 services:
   mongo:
@@ -60,12 +64,36 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8090}:8080"
     volumes:
-      - source-data:/data/source:ro
-      # Temporal Docs MCP sign-in (scripts/mcp_login.py), for docs search in chat.
-      # Read-write: the client saves a rotated refresh token if the server issues one.
+      # Read-write: deleting an index from the UI removes its mirrored source.
+      - source-data:/data/source
+      # Temporal Docs MCP sign-in (scripts/mcp_login.py), for docs search in chat and the
+      # preflight before a sync. Read-write: the client saves a rotated refresh token.
       - ${CODE_ATLAS_CONFIG_DIR:-${HOME}/.config/code-atlas}:/run/code-atlas
+      # The folder picker and the "is a sync needed?" check read repositories here.
+      - ${REPOS_ROOT:-${HOME}}:${REPOS_ROOT:-${HOME}}:ro
     depends_on:
       mongo:
+        condition: service_healthy
+
+  # Runs the syncs started from the UI ("+ Add index", "Sync"): an embedded worker per
+  # running sync, as index.sh does for its own; after a restart it resumes them.
+  worker:
+    build: .
+    image: code-atlas:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *app-env
+    entrypoint: ["semantic-ingress"]
+    command: ["worker"]
+    volumes:
+      - source-data:/data/source
+      - ${CODE_ATLAS_CONFIG_DIR:-${HOME}/.config/code-atlas}:/run/code-atlas
+      - ${REPOS_ROOT:-${HOME}}:${REPOS_ROOT:-${HOME}}:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+      temporal:
         condition: service_healthy
 
   # Compass Web: MongoDB Compass in the browser, for looking at what an index stores
@@ -84,7 +112,8 @@ services:
       mongo:
         condition: service_healthy
 
-  # Run on demand: docker compose run --rm indexer sync --repo-path /repos/<name> --repo-id <name>
+  # Run on demand: docker compose run --rm -v /path/to/repo:/path/to/repo/:ro indexer \
+  #   sync --repo-path /path/to/repo --repo-id <name>
   # (scripts/index.sh wraps this and mounts the folder for you)
   indexer:
     build: .

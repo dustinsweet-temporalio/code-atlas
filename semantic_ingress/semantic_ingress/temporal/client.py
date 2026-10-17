@@ -15,34 +15,24 @@ from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from semantic_ingress.config import IngestionConfig
-from semantic_ingress.core.llm_client import LLMClient, LLMUsage
+from semantic_ingress.core.llm_client import LLMClient
 from semantic_ingress.preflight import PreflightResult
 from semantic_ingress.storage import MongoStore
 from semantic_ingress.storage.staging_store import StagingStore
 from semantic_ingress.temporal.activities import IndexActivities
-from semantic_ingress.temporal.constants import task_queue, workflow_id
+from semantic_ingress.temporal.constants import ORIGIN_CLI, sync_memo, task_queue, workflow_id
 from semantic_ingress.temporal.models import (
     Progress,
     SyncOutcome,
     SyncParams,
     SyncPlan,
     SyncWorkflowInput,
-    UsageTotals,
 )
+from semantic_ingress.temporal.progress import usage_cost
 from semantic_ingress.temporal.worker import build_worker
 from semantic_ingress.temporal.workflow import SyncWorkflow
 
 PROGRESS_POLL_SECONDS = 5.0
-
-
-def usage_cost(usage: UsageTotals) -> float:
-    """Estimated cost at the configured prices (set when an LLMClient is created)."""
-    return LLMUsage(
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read_tokens=usage.cache_read_tokens,
-        cache_write_tokens=usage.cache_write_tokens,
-    ).total_cost_usd
 
 
 def progress_line(p: Progress) -> str:
@@ -99,7 +89,8 @@ async def start_or_attach(
                 id=wid,
                 task_queue=queue,
                 id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-                memo={"repo_id": repo_id, "mode": "sync"},
+                memo=sync_memo(repo_id, params.repo_path, ORIGIN_CLI,
+                               report=params.lens_enabled and not params.no_report),
             )
             if attached:
                 print(f"Attached to the running sync for {repo_id} (the original run's options apply)")

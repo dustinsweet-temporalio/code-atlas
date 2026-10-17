@@ -74,6 +74,13 @@ def classify_llm_error(e: Exception) -> LLMError:
 _pricing = {"input": 2.00, "output": 10.00, "cache_read": 0.05}
 
 
+def set_pricing(config: LLMConfig) -> None:
+    """Use the configured prices for cost estimates (LLMClient does this; so does the web UI's progress)."""
+    _pricing["input"] = config.input_price_per_1m
+    _pricing["output"] = config.output_price_per_1m
+    _pricing["cache_read"] = config.cache_read_multiplier
+
+
 # Prompt-cache writes relative to the input price (5-minute cache). Cache reads
 # vary by model (0.05x on the 5.5 models, 0.1x on most others) and come from config.
 CACHE_WRITE_MULTIPLIER = 1.25
@@ -153,9 +160,7 @@ class LLMClient:
             timeout=config.timeout_seconds,
             max_retries=config.max_retries if internal_retries else 0,
         )
-        _pricing["input"] = config.input_price_per_1m
-        _pricing["output"] = config.output_price_per_1m
-        _pricing["cache_read"] = config.cache_read_multiplier
+        set_pricing(config)
         self.total_usage = LLMUsage(input_tokens=0, output_tokens=0)
 
         self.log.info("llm_client_initialized")

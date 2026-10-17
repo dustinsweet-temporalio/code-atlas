@@ -24,6 +24,7 @@ semantic-ingress sync --repo-path /path/to/repo --repo-id my-repo
 | Command | Purpose |
 | --- | --- |
 | `sync` | Index or update a repository, as the Temporal workflow `sync-<repo-id>`. Detects full vs incremental by comparing the index with git |
+| `worker` | Run the syncs started from the web UI (the compose `worker` service): a worker per running sync, resumed after a restart |
 | `estimate` | Local token and cost estimate. Makes no API calls |
 | `repair-folders` | Legacy. Targets the old structured schema and does not work on indexes made by `sync` |
 | `dir-list-only` | Regenerate only the directory listing document |
@@ -34,6 +35,8 @@ Common options: `--repo-path` (repository root), `--repo-id` (name in the index:
 ## `sync` on Temporal
 
 `sync` connects to the Temporal server, starts a worker in its own process (task queue `code-atlas-sync-<repo-id>`), and starts or attaches to the workflow `sync-<repo-id>`. It prints progress while the workflow runs and the same end-of-run summary as before. Ctrl-C leaves the workflow on the server; running the same command again attaches to it and the new worker resumes it from its history.
+
+The web UI starts the same workflow without a worker of its own (memo `origin: "ui"`, with the repository's path). The `worker` command (temporal/service.py) looks for running UI syncs every few seconds and runs an embedded worker for each until its workflow closes, so they resume after a restart. When it cannot run one (the repository is not visible, or the preflight fails), it stores the reason in `code_atlas_ingest.worker_status` for the UI and tries again a minute later.
 
 The workflow (`semantic_ingress/temporal/workflow.py`) runs these phases: plan (pin HEAD, full or incremental, stage the work items) → file summaries → lens refresh (`--refresh-lens`) → folder summaries (deepest level first) → repository summary and lens → delete removed files → persist → index metadata and text indexes → source mirror → Temporal report → disk export → clean up staging. File, lens and folder summaries run in a sliding window of `--window-size` activities. Activities stage their documents in the `code_atlas_ingest` database instead of returning them, so workflow history stays small; the workflow continues as new when Temporal suggests it (`--can-after N` forces it after N items, for testing).
 

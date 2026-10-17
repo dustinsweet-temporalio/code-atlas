@@ -51,7 +51,10 @@ fi
 # Temporal Docs MCP credentials (written by scripts/mcp_login.py), used by the Temporal lens.
 creds_dir="${CODE_ATLAS_CONFIG_DIR:-$HOME/.config/code-atlas}"
 mkdir -p "$creds_dir"
-mounts=(-v "$repo_path:/repos/$name:ro" -v "$creds_dir:/run/code-atlas")
+# The repository is mounted at its own path, so the index records where it really is
+# (the UI offers that path for the next sync). The trailing slash on the target is
+# deliberate: Docker Desktop mounts "-v X:X:ro" at "Xo", read-write.
+mounts=(-v "$repo_path:$repo_path/:ro" -v "$creds_dir:/run/code-atlas")
 
 # Check the pack, Anthropic, MongoDB, the Temporal server and the Temporal Docs MCP before spending anything.
 docker compose run --rm "${mounts[@]}" indexer preflight || {
@@ -63,6 +66,6 @@ docker compose run --rm "${mounts[@]}" indexer preflight || {
 echo "Indexing $repo_path as '$name' (committed files at HEAD)"
 status=0
 docker compose run --rm "${mounts[@]}" indexer \
-  sync --repo-path "/repos/$name" --repo-id "$name" "$@" || status=$?
+  sync --repo-path "$repo_path" --repo-id "$name" "$@" || status=$?
 echo "Workflow: http://localhost:${TEMPORAL_UI_PORT:-8233}/namespaces/default/workflows/sync-$name"
 exit "$status"

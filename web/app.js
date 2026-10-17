@@ -1,8 +1,10 @@
 // Code Atlas chat UI. No build step; libraries are vendored under vendor/.
 //
-// Every conversation is about one index, chosen in the sidebar before the chat is
-// started. The index is sent with every message, so the first message is the
-// user's own question, with the repository overview already in context.
+// Every conversation is about one index. The page opens on the home view (the list of
+// indexes, where they are added, synced and deleted); the chat appears once an index is
+// selected, and a conversation is saved when its first question is sent. The index is
+// sent with every message, so the first message is the user's own question, with the
+// repository overview already in context.
 (() => {
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -12,19 +14,19 @@
     chatRepoMeta: $("chat-repo-meta"), reportToggle: $("report-toggle"), reportView: $("report-view"),
     reportActions: $("report-actions"), reportSummary: $("report-summary"), reportDetailed: $("report-detailed"),
     reportDownload: $("report-download"), compassOpen: $("compass-open"), temporalLink: $("temporal-ui-link"),
+    home: $("home"), homeView: $("home-view"), addIndex: $("add-index"), repoActions: $("repo-actions"),
+    syncIndex: $("sync-index"), deleteIndex: $("delete-index"),
   };
 
   // ---- storage (per-browser; every access guarded) ----
   const KEY = "code-atlas:conversations:v1";
-  const REPO_KEY = "code-atlas:selected-index";
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state.conversations)); } catch { /* quota/private mode */ } };
-  const loadSelected = () => { try { return localStorage.getItem(REPO_KEY) || ""; } catch { return ""; } };
-  const saveSelected = (v) => { try { localStorage.setItem(REPO_KEY, v); } catch { /* ignore */ } };
 
   const state = {
     conversations: load(), activeId: null, streaming: false, controller: null,
-    repos: new Map(), reposLoaded: false, repoIds: "", selected: loadSelected(), view: "chat",
+    // selected: the index the main view is about ("" on the home view). Not restored on load.
+    repos: new Map(), reposLoaded: false, repoIds: "", reposJSON: "", selected: "", view: "chat", config: {},
     // The loaded report: {repo, payload, markdown (fetched on first use), mode: "summary" | "detailed"}.
     report: null,
   };
@@ -72,6 +74,10 @@
 
   // ---- conversations ----
   const active = () => state.conversations.find((c) => c.id === state.activeId);
+  // The index the chat is about: the open conversation's, or the selected one for a new chat.
+  const currentRepo = () => { const c = active(); return c ? c.repo : state.selected || null; };
+  const isHome = () => !active() && !state.selected;
+  const conversationsAbout = (repo) => state.conversations.filter((c) => c.repo === repo && c.messages.length).length;
   const shorten = (text) => (text.length > 48 ? text.slice(0, 45) + "…" : text);
   const firstQuestion = (c) => c.messages.find((m) => m.role === "user")?.content.trim();
   const retitle = (c) => { const q = firstQuestion(c); c.title = q ? shorten(q) : "New chat"; };
@@ -115,25 +121,29 @@
         e.stopPropagation();
         if (state.streaming) return;
         state.conversations = state.conversations.filter((x) => x.id !== c.id);
-        if (state.activeId === c.id) state.activeId = state.conversations[0]?.id ?? null;
+        if (state.activeId === c.id) state.activeId = null;  // back to a new chat about the same index
         save(); renderAll();
       };
       li.append(text, del);
-      li.onclick = () => { if (!state.streaming) { state.activeId = c.id; renderAll(); } };
+      li.onclick = () => {
+        if (state.streaming) return;
+        state.activeId = c.id;
+        state.selected = c.repo && state.repos.has(c.repo) ? c.repo : "";
+        renderRepoSelect(); renderAll();
+      };
       els.convs.appendChild(li);
     });
   }
 
   function renderHeader() {
-    const c = active();
-    els.header.hidden = !c;
-    if (!c) return;
-    els.chatRepo.textContent = c.repo || "none recorded";
-    els.reportToggle.hidden = !c.repo;
-    els.compassOpen.hidden = !c.repo;
-    const r = c.repo && state.repos.get(c.repo);
+    if (isHome()) return;  // layout() hides the header
+    const repo = currentRepo();
+    els.chatRepo.textContent = repo || "none recorded";
+    els.reportToggle.hidden = !repo;
+    els.compassOpen.hidden = !repo;
+    const r = repo && state.repos.get(repo);
     els.chatRepoMeta.textContent = r ? repoMeta(r)
-      : c.repo ? (state.repos.size ? "no longer indexed" : "")
+      : repo ? (state.reposLoaded ? "no longer indexed" : "")
       : "This conversation was started before indexes were chosen up front. Start a new chat to continue.";
   }
 
@@ -156,18 +166,14 @@
 
   function renderMessages() {
     els.messages.innerHTML = "";
+    if (isHome()) return;
     const c = active();
-    if (!c) {
-      els.messages.innerHTML = '<div class="empty"><h1>Ask about your code</h1>' +
-        '<p>Select an index on the left, then start a new chat. ' +
-        'Answers are built from the semantic index and the mirrored source.</p></div>';
-      return;
-    }
-    if (c.messages.length === 0) {
+    if (!c || c.messages.length === 0) {
+      const repo = currentRepo();
       const empty = document.createElement("div"); empty.className = "empty";
       empty.innerHTML = "<h1></h1><p>Ask anything about this repository: what it does, where something lives, " +
         "how a part works. Answers are built from the semantic index and the mirrored source.</p>";
-      empty.querySelector("h1").textContent = c.repo ? `Ask about ${c.repo}` : "No index recorded";
+      empty.querySelector("h1").textContent = repo ? `Ask about ${repo}` : "No index recorded";
       els.messages.appendChild(empty);
       return;
     }
@@ -177,15 +183,119 @@
 
   function renderComposer() {
     const c = active();
-    const usable = !!(c && c.repo) && !state.streaming;
+    const repo = currentRepo();
+    const indexed = !!repo && (!state.reposLoaded || state.repos.has(repo));
+    const usable = indexed && !state.streaming;
     els.input.disabled = !usable; els.send.disabled = !usable;
-    els.input.placeholder = !c ? "Select an index and start a new chat"
-      : !c.repo ? "Start a new chat to continue" : `Ask about ${c.repo}…`;
+    els.input.placeholder = !repo ? (c ? "Start a new chat to continue" : "Select an index")
+      : !indexed ? `${repo} is no longer indexed. Start a new chat with another index.` : `Ask about ${repo}…`;
     els.newChat.disabled = !state.selected || state.streaming;
     els.newChat.title = state.selected ? `New chat about ${state.selected}` : "Select an index first";
   }
 
-  const renderAll = () => { showChat(); renderSidebar(); renderHeader(); renderMessages(); renderComposer(); };
+  // Which parts of the main area show: the home view, or the chat (or report) about an index.
+  function layout() {
+    const home = isHome();
+    els.homeView.hidden = !home;
+    els.header.hidden = home;
+    els.reportView.hidden = home || state.view !== "report";
+    els.messages.hidden = home || state.view === "report";
+    els.form.hidden = home || state.view === "report";
+  }
+
+  const renderAll = () => { showChat(); renderSidebar(); renderHeader(); renderMessages(); renderComposer(); renderHome(); };
+
+  // ---- home view: the indexes, with their actions ----
+  const ago = (iso) => {
+    const t = Date.parse(iso);
+    if (!t) return "";
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 90) return "just now";
+    if (s < 5400) return `${Math.round(s / 60)} minutes ago`;
+    if (s < 129600) return `${Math.round(s / 3600)} hours ago`;
+    return `${Math.round(s / 86400)} days ago`;
+  };
+  const elt = (tag, className, text) => {
+    const n = document.createElement(tag);
+    if (className) n.className = className;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const button = (text, className, onClick, title) => {
+    const b = elt("button", className, text); b.type = "button";
+    if (title) b.title = title;
+    b.addEventListener("click", onClick);
+    return b;
+  };
+
+  function renderHome() {
+    if (!isHome()) { els.homeView.innerHTML = ""; return; }
+    const v = els.homeView;
+    v.innerHTML = "";
+    const wrap = elt("div", "home");
+    const head = elt("div", "home-head");
+    const titles = elt("div");
+    titles.append(elt("h1", null, "Your indexes"),
+      elt("p", "muted", "Choose an index to ask about its code, or add a git repository to index it."));
+    const canIndex = state.config.indexing_enabled !== false;
+    if (canIndex) head.append(titles, button("+ Add index", "primary", () => indexing.openAdd()));
+    else head.append(titles);
+    wrap.appendChild(head);
+
+    if (!state.reposLoaded) {
+      wrap.appendChild(elt("p", "muted", "Loading the indexes…"));
+    } else if (!state.repos.size) {
+      const empty = elt("div", "home-empty");
+      empty.append(elt("h2", null, "No indexes yet"),
+        elt("p", "muted", canIndex
+          ? "Add a git repository: Code Atlas summarises its files and folders, then answers questions about it."
+          : "Indexing from the UI is off (set REPOS_ROOT in .env). Index a repository with ./scripts/index.sh."));
+      if (canIndex) empty.appendChild(button("+ Add index", "primary", () => indexing.openAdd()));
+      wrap.appendChild(empty);
+    } else {
+      const grid = elt("div", "index-grid");
+      for (const [id, r] of state.repos) {
+        const job = indexing.running(id);
+        const card = elt("article", "index-card");
+        const top = elt("div", "index-top");
+        top.appendChild(button(id, "index-name", () => openChat(id), `Chat about ${id}`));
+        if (job) top.appendChild(elt("span", "badge running", "syncing"));  // progress is in the panel above
+        card.appendChild(top);
+        const meta = elt("p", "muted index-meta", repoMeta(r) + (r.indexed_at ? ` · indexed ${ago(r.indexed_at)}` : ""));
+        meta.title = lensTooltip(r);
+        card.appendChild(meta);
+        const path = elt("p", "index-path", r.repo_path || "Folder not recorded (indexed by an older version)");
+        path.title = r.repo_path || "";
+        card.appendChild(path);
+        const actions = elt("div", "index-actions");
+        actions.appendChild(button("Chat", "primary small", () => openChat(id)));
+        const busy = job ? "A sync is running" : "";
+        const sync = button("Sync…", "ghost", () => indexing.openSync(id), busy || "Check for changes and update the index");
+        sync.hidden = !canIndex;
+        const del = button("Delete…", "ghost danger", () => indexing.openDelete(id), busy || "Delete this index");
+        sync.disabled = del.disabled = !!job;
+        actions.append(sync, del);
+        card.appendChild(actions);
+        grid.appendChild(card);
+      }
+      wrap.appendChild(grid);
+    }
+    v.appendChild(wrap);
+  }
+
+  // Open the chat about an index (a new conversation, saved when its first question is sent).
+  function openChat(repo) {
+    if (state.streaming) return;
+    state.selected = repo; state.activeId = null;
+    renderRepoSelect(); renderAll();
+    els.input.focus();
+  }
+
+  function goHome() {
+    if (state.streaming) return;
+    state.selected = ""; state.activeId = null;
+    renderRepoSelect(); renderAll();
+  }
 
   // ---- Temporal report view (the conversation's index) ----
   // Two views of one report: the summary (rendered from the report data) and the
@@ -193,9 +303,9 @@
   // as what it is: the summary as a standalone HTML page, the detailed report as .md.
   function showChat() {
     state.view = "chat";
-    els.reportView.hidden = true; els.messages.hidden = false; els.form.hidden = false;
     els.reportActions.hidden = true;
     els.reportToggle.textContent = "Temporal report";
+    layout();
   }
 
   const reportMessage = (text) => {
@@ -204,29 +314,30 @@
     els.reportView.appendChild(p);
   };
   // The view still shows this report in this mode (the user may have moved on during a fetch).
-  const reportCurrent = (r, mode) => state.view === "report" && state.report === r && r.mode === mode && active()?.repo === r.repo;
+  const reportCurrent = (r, mode) => state.view === "report" && state.report === r && r.mode === mode && currentRepo() === r.repo;
 
   async function showReport() {
+    const repo = currentRepo();
+    if (!repo) return;
     const c = active();
-    if (!c || !c.repo) return;
     state.view = "report"; state.report = null;
-    els.messages.hidden = true; els.form.hidden = true; els.reportView.hidden = false;
+    layout();
     els.reportActions.hidden = true;
     els.reportToggle.textContent = "Back to chat";
     els.reportView.innerHTML = '<div class="report"><p class="muted">Loading the report…</p></div>';
     try {
-      const res = await fetch(`/api/report/${encodeURIComponent(c.repo)}`);
+      const res = await fetch(`/api/report/${encodeURIComponent(repo)}`);
       const body = await res.json();
-      if (state.view !== "report" || active() !== c) return;  // the user moved on
+      if (state.view !== "report" || active() !== c || currentRepo() !== repo) return;  // the user moved on
       if (!res.ok) {
         els.reportView.innerHTML = "";
         const empty = document.createElement("div"); empty.className = "empty";
         empty.innerHTML = "<h1>No Temporal report yet</h1><p></p>";
-        empty.querySelector("p").textContent = `${body.error || ""} It is built when the index is updated with the Temporal lens on, or with ./scripts/report.sh ${c.repo}.`;
+        empty.querySelector("p").textContent = `${body.error || ""} It is built when the index is updated with the Temporal lens on, or with ./scripts/report.sh ${repo}.`;
         els.reportView.appendChild(empty);
         return;
       }
-      state.report = { repo: c.repo, payload: body, markdown: null, mode: "summary" };
+      state.report = { repo, payload: body, markdown: null, mode: "summary" };
       els.reportActions.hidden = false;
       showReportMode("summary");
     } catch (e) {
@@ -344,14 +455,14 @@ ${clone.outerHTML}
   // the URL the server looks up; if the lookup fails, the tab says why.
   const compassTitle = els.compassOpen.title;
   async function openCompass() {
-    const c = active();
-    if (!c || !c.repo) return;
+    const repo = currentRepo();
+    if (!repo) return;
     els.compassOpen.title = compassTitle;
     const tab = window.open("", "_blank");
     if (tab) { tab.opener = null; tab.document.title = "Opening Compass…"; tab.document.body.textContent = "Opening Compass…"; }
     let error;
     try {
-      const res = await fetch(`/api/compass/${encodeURIComponent(c.repo)}`);
+      const res = await fetch(`/api/compass/${encodeURIComponent(repo)}`);
       const body = await res.json();
       if (res.ok) {
         if (tab) tab.location.replace(body.url); else window.open(body.url, "_blank", "noopener");
@@ -375,8 +486,9 @@ ${clone.outerHTML}
 
   async function ask(text) {
     text = text.trim();
-    const c = active();
-    if (!text || state.streaming || !c || !c.repo) return;
+    const repo = currentRepo();
+    if (!text || state.streaming || !repo) return;
+    const c = active() || newConversation(repo);  // a new chat is saved with its first question
     c.messages.push({ role: "user", content: text });
     retitle(c);
     save(); renderAll(); els.input.value = ""; autosize();
@@ -472,15 +584,29 @@ ${clone.outerHTML}
     sel.value = state.selected;
     const r = state.repos.get(state.selected);
     els.repoMeta.textContent = r ? repoMeta(r)
-      : state.reposLoaded && !state.repos.size ? "Index one with the CLI (see README)." : "";
+      : state.reposLoaded && !state.repos.size ? "Add a repository with + Add index." : "";
     els.repoMeta.title = r ? lensTooltip(r) : "";
+    renderRepoActions();
     renderTemporalLink();
   }
 
+  // Sync and Delete for the selected index (not while a sync of it runs).
+  function renderRepoActions() {
+    const id = state.selected;
+    els.repoActions.hidden = !id;
+    if (!id) return;
+    const job = indexing.running(id);
+    els.syncIndex.disabled = els.deleteIndex.disabled = !!job;
+    els.syncIndex.title = job ? "A sync is running" : `Check ${id} for changes and update its index`;
+    els.deleteIndex.title = job ? "A sync is running" : `Delete the index ${id}`;
+  }
+
   async function loadRepos() {
+    let reposJSON;
     try {
       const { repos } = await (await fetch("/api/repos")).json();
       state.repos = new Map((repos || []).map((r) => [r.repo_id, r]));
+      reposJSON = JSON.stringify(repos);
     } catch {
       els.repoMeta.textContent = "Could not load indexes.";
       return;
@@ -496,6 +622,10 @@ ${clone.outerHTML}
       if (r) { els.repoMeta.textContent = repoMeta(r); els.repoMeta.title = lensTooltip(r); }
     }
     renderHeader(); renderComposer();
+    // The home view is rebuilt only when something on it changed (a rebuild loses keyboard focus).
+    if (changed || reposJSON !== state.reposJSON) renderHome();
+    state.reposJSON = reposJSON;
+    indexing.render();  // a finished sync's "Open chat" needs the new index
   }
 
   // Temporal UI link: the sync workflows of the selected index, or the UI's home page.
@@ -510,8 +640,11 @@ ${clone.outerHTML}
   async function loadConfig() {
     try {
       const c = await (await fetch("/api/config")).json();
+      state.config = c;
       if (c.temporal_ui_url) temporal.url = c.temporal_ui_url.replace(/\/$/, "");
       if (c.temporal_namespace) temporal.namespace = c.temporal_namespace;
+      els.addIndex.hidden = els.syncIndex.hidden = c.indexing_enabled === false;
+      renderHome();
     } catch { /* keep the fallback link */ }
     renderTemporalLink();
   }
@@ -562,24 +695,32 @@ ${clone.outerHTML}
   els.reportDownload.addEventListener("click", downloadReport);
   els.compassOpen.addEventListener("click", openCompass);
 
+  // Selecting an index opens a new chat about it; the empty choice goes back to the home view.
   els.repoSelect.addEventListener("change", () => {
-    state.selected = els.repoSelect.value; saveSelected(state.selected);
-    renderRepoSelect();
-    // A chat with no messages yet follows the selection; a started chat keeps its index.
-    const c = active();
-    if (c && c.messages.length === 0 && state.selected) { c.repo = state.selected; save(); renderAll(); }
-    else renderComposer();
+    if (state.streaming) { els.repoSelect.value = state.selected; return; }
+    if (els.repoSelect.value) openChat(els.repoSelect.value); else goHome();
   });
-  els.newChat.addEventListener("click", () => {
-    if (state.streaming || !state.selected) return;
-    const c = active();
-    if (c && c.messages.length === 0) { c.repo = state.selected; save(); }  // reuse an empty chat
-    else newConversation(state.selected);
-    renderAll(); els.input.focus();
+  els.newChat.addEventListener("click", () => { if (state.selected) openChat(state.selected); });
+  els.home.addEventListener("click", goHome);
+  els.addIndex.addEventListener("click", () => indexing.openAdd());
+  els.syncIndex.addEventListener("click", () => { if (state.selected) indexing.openSync(state.selected); });
+  els.deleteIndex.addEventListener("click", () => { if (state.selected) indexing.openDelete(state.selected); });
+
+  const indexing = window.createIndexing({
+    repos: () => state.repos,
+    config: () => state.config,
+    conversationsAbout,
+    onSyncsChanged: () => { renderRepoActions(); renderHome(); },
+    onIndexesChanged: loadRepos,
+    onDeleted: (repo) => {
+      if (state.selected === repo && !active()) goHome();
+      else if (state.selected === repo) { state.selected = ""; renderRepoSelect(); renderAll(); }
+    },
+    openChat,
   });
 
-  state.activeId = state.conversations[0]?.id ?? null;
-  renderAll(); renderRepoSelect(); loadRepos(); loadHealth(); loadConfig();
+  // Opens on the home view: no conversation and no index selected.
+  renderAll(); renderRepoSelect(); loadRepos(); loadHealth(); loadConfig(); indexing.start();
   setInterval(loadRepos, 30000);
   setInterval(loadHealth, 5 * 60 * 1000);
   els.docsStatus.addEventListener("click", () => {

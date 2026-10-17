@@ -22,6 +22,17 @@ def task_queue(repo_id: str) -> str:
     return f"code-atlas-sync-{repo_id}"
 
 
+# Memo `origin` of a run: started by `sync` (index.sh, which runs its own worker) or by
+# the web UI (run by the `worker` service, which looks for running "ui" syncs).
+ORIGIN_CLI = "cli"
+ORIGIN_UI = "ui"
+
+
+def sync_memo(repo_id: str, repo_path: str, origin: str, report: bool) -> dict:
+    """What a run records about itself for the UI and the worker service (`report`: it builds the report)."""
+    return {"repo_id": repo_id, "mode": "sync", "origin": origin, "repo_path": repo_path, "report": report}
+
+
 # Activity names (explicit, so renaming a method never breaks a running workflow).
 PLAN_SYNC = "plan_sync"
 LOAD_WORK_PAGE = "load_work_page"

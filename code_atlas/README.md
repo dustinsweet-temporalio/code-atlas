@@ -9,6 +9,7 @@ The `tools/` and `utils/` packages are imported as top-level modules, so run eve
 | Path | Purpose |
 | --- | --- |
 | `app.py` | FastAPI server: `GET /api/health`, `GET /api/repos`, `POST /api/chat` (server-sent events), static UI |
+| `indexing.py` | Indexing from the UI: folder picker (`GET /api/fs`), the sync check (`POST /api/sync/check`), starting a sync (`POST /api/sync`), progress (`GET /api/syncs`), deleting an index (`DELETE /api/repos/{name}`) |
 | `agent.py` | Builds the model from `QUERY_*` settings and streams the answer; conversation history goes in the system prompt (stateless) |
 | `config.py` | Environment-driven settings and the agent system prompt |
 | `tools/navigation/` | List repositories; repository, folder and file summaries; directory listing |
