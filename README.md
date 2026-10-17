@@ -15,7 +15,7 @@ python3 scripts/mcp_login.py  # one-time sign-in to the Temporal Docs MCP (for t
 
 Skip the sign-in by setting `LENS_ENABLED=false` in `.env` if you do not want the Temporal lens.
 
-Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`), select an index on the left, click **New chat**, and ask your question. Each conversation stays with the index it was started on; the index is shown above the chat and under the conversation's name.
+Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`), select an index on the left, click **New chat**, and ask your question. Each conversation stays with the index it was started on; the index is shown above the chat and under the conversation's name. Every prompt and answer has a **Copy** button (answers copy as Markdown, ready to paste into Claude Code), and **Open in Compass** above the chat opens the index's database in Compass Web.
 
 ## Indexing a repository
 
@@ -110,7 +110,7 @@ Questions are answered by an agent that starts at the repository's root summary,
 
 - Summaries live in the `mongo-data` Docker volume; mirrored source in `source-data`.
 - `docker compose down` stops everything and keeps your data. `docker compose down -v` also **deletes the index and the mirrored source**.
-- MongoDB is not published to your host. To inspect it: `docker compose exec mongo mongosh`.
+- MongoDB is not published to your host. To look at what an index stores (summaries, lenses, reports), click **Open in Compass** above a chat, or open Compass Web at <http://localhost:8096> (change the port with `COMPASS_PORT` in `.env`). Compass Web is a community build of Compass's web UI (`haohanyang/compass-web`), not an official MongoDB image, and it can edit data as well as view it. For a shell: `docker compose exec mongo mongosh`.
 - Maintenance commands (run through `docker compose run --rm indexer <command> ...`): `sync`, `report`, `preflight`, `estimate`, `dir-list-only`, `source-mirror`. Add `--help` to any of them.
 - Temporal reports are written to `reports/<name>/` in this folder (ignored by git).
 - Chat history is stored in your browser only.

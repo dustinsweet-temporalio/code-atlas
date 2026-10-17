@@ -32,9 +32,10 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `REPORT_RUBRIC_PATH` | built into the image | indexer (`report`) | Path to `temporal-rubric.yaml` (how the report scores processes and Temporal code) |
 | `DB_PREFIX` | `semv2` | both | Database name prefix; must start with `sem` and match on both sides |
 | `APP_PORT` | `8090` | compose | Host port for the UI (bound to localhost) |
+| `COMPASS_PORT` | `8096` | compose | Host port for Compass Web (bound to localhost), opened by **Open in Compass** |
 | `LOG_LEVEL` | `INFO` | app | Query-side log level |
 
-Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`.
+Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`.
 
 ## Changing models
 
