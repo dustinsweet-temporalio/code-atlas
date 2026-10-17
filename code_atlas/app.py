@@ -12,6 +12,7 @@ Serves the chat UI and a small API:
     POST /api/chat     one message of a conversation; streams the answer as SSE (see chat())
     POST /api/chat/{repo_id}/{session_id}/stop    stop the turn in flight ({turn_id})
     DELETE /api/chat/{repo_id}/{session_id}       end the conversation's session workflow
+    GET  /api/chat/{repo_id}/{session_id}/turns/{turn_id}/stream  reattach to a turn (after a reload)
 
 Run with: uvicorn app:app --host 0.0.0.0 --port 8080
 """
@@ -29,7 +30,7 @@ from typing import List, Literal
 from urllib.parse import quote
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -40,7 +41,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from chat import constants as C
 from chat.context import trim_to_budget
 from chat.models import ChatMessage as TurnMessage
-from chat.models import ChatSessionInput, SendMessageInput
+from chat.models import ChatSessionInput, SendMessageInput, TurnLookup
 from chat.streaming import turn_key
 from chat.workflow import ChatSessionWorkflow
 from config import (
@@ -491,6 +492,114 @@ async def stop_turn(repo_id: str, session_id: str, body: StopRequest):
 async def close_session(repo_id: str, session_id: str):
     """End the conversation's session workflow (the browser deleted the conversation)."""
     return await _signal_session(repo_id, session_id, C.CLOSE_SIGNAL)
+
+
+REATTACH_WAIT_SECONDS = 30  # for a turn whose stream has not started yet
+
+
+async def _lookup_turn(repo_id: str, session_id: str, turn_id: str) -> TurnLookup | None:
+    """The session's record of a turn, or None when the session workflow does not exist."""
+    client = await get_temporal()
+    handle = client.get_workflow_handle(C.workflow_id(repo_id, session_id))
+    try:
+        return await handle.query(C.GET_TURN_QUERY, turn_id, result_type=TurnLookup)
+    except RPCError as e:
+        if e.status == RPCStatusCode.NOT_FOUND:
+            return None
+        raise
+
+
+async def reattach_relay(redis, repo_id: str, session_id: str, turn_id: str, start: str = "0-0"):
+    """
+    Replay a turn's stream until its `done` event, then reconcile with the session's
+    record. A turn that fails writes no `done`, so a quiet stream is checked against the
+    session's record, and the replay gives up after the turn timeout.
+    """
+    key, last, streamed = turn_key(turn_id), start, []
+    deadline = time.monotonic() + CHAT_TURN_TIMEOUT_MINUTES * 60 + 60
+    idle_since = time.monotonic()
+    stopped = finished = False
+    record = None
+    while not finished:
+        resp = await redis.xread({key: last}, count=200, block=1000)
+        entries = resp[0][1] if resp else []
+        for entry_id, fields in entries:
+            last = entry_id
+            t = fields.get("t")
+            if t == "chunk":
+                streamed.append(fields.get("d", ""))
+                yield _sse(fields.get("d", ""))
+            elif t == "reset":
+                streamed.clear()
+                yield _sse({"reset": True})
+            elif t == "done":
+                finished, stopped = True, fields.get("d") == "stopped"
+        if entries or finished:
+            idle_since = time.monotonic()
+        elif time.monotonic() - idle_since > 15:
+            yield b": keepalive\n\n"
+            idle_since = time.monotonic()
+            try:
+                record = await _lookup_turn(repo_id, session_id, turn_id)
+            except Exception:
+                record = None
+            if record is not None and record.found:
+                break
+            if time.monotonic() > deadline:
+                yield _sse({"error": "The response did not finish."})
+                yield b"data: [DONE]\n\n"
+                return
+    if record is None or not record.found:
+        try:
+            record = await _lookup_turn(repo_id, session_id, turn_id)
+        except Exception:
+            record = None  # the stream is all we have
+    if stopped or (record and record.stopped):
+        yield _sse({"stopped": True})
+    elif record and record.found and record.answer != "".join(streamed):
+        yield _sse({"reset": True})
+        yield _sse(record.answer)
+    yield b"data: [DONE]\n\n"
+
+
+@app.get("/api/chat/{repo_id}/{session_id}/turns/{turn_id}/stream")
+async def reattach(repo_id: str, session_id: str, turn_id: str, request: Request):
+    """
+    Reattach to a turn after a reload: replay its token stream (from the start, or from
+    the Last-Event-ID header), the same SSE events as POST /api/chat. When the stream is
+    gone, the answer the session recorded comes as one chunk; 404 when neither exists.
+    """
+    if not (re.match(REPO_PATTERN, repo_id) and re.match(UUID_PATTERN, session_id)
+            and re.match(UUID_PATTERN, turn_id)):
+        return JSONResponse({"error": "Invalid turn."}, status_code=400)
+    redis = app.state.redis
+    try:
+        deadline = time.monotonic() + REATTACH_WAIT_SECONDS
+        while True:
+            if await redis.exists(turn_key(turn_id)):
+                start = request.headers.get("last-event-id") or "0-0"
+                return StreamingResponse(
+                    reattach_relay(redis, repo_id, session_id, turn_id, start),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+            record = await _lookup_turn(repo_id, session_id, turn_id)
+            if record is None:
+                return JSONResponse({"error": "No session for this conversation."}, status_code=404)
+            if record.found:
+                final = _sse({"stopped": True}) if record.stopped else _sse(record.answer)
+
+                async def one():
+                    yield final
+                    yield b"data: [DONE]\n\n"
+
+                return StreamingResponse(one(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+            if time.monotonic() > deadline:  # the session never ran this turn
+                return JSONResponse({"error": "This response is no longer available."}, status_code=404)
+            await asyncio.sleep(1)  # the turn may not have started streaming yet
+    except Exception as e:
+        logger.error(f"Reattach to {turn_id} failed: {e}")
+        return JSONResponse({"error": f"Could not reattach ({e})."}, status_code=503)
 
 
 @app.get("/")

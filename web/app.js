@@ -32,7 +32,7 @@
     repos: new Map(), reposLoaded: false, repoIds: "", selected: loadSelected(), view: "chat",
     // The loaded report: {repo, payload, markdown (fetched on first use), mode: "summary" | "detailed"}.
     report: null,
-    storageOk: true, storageWarning: "", chatContextChars: 240000,
+    storageOk: true, storageWarning: "", chatContextChars: 240000, reattaching: new Set(),
   };
 
   const showStorageWarning = (text) => {
@@ -223,7 +223,7 @@
 
   function renderComposer() {
     const c = active();
-    const usable = !!(c && c.repo) && !state.streaming;
+    const usable = !!(c && c.repo) && !state.streaming && !state.reattaching.has(c.id);
     els.input.disabled = !usable; els.send.disabled = !usable;
     els.input.placeholder = !c ? "Select an index and start a new chat"
       : !c.repo ? "Start a new chat to continue" : `Ask about ${c.repo}…`;
@@ -432,6 +432,24 @@ ${clone.outerHTML}
     return kept.map(({ role, content }) => ({ role, content }));
   };
 
+  // Reads a chat SSE response, calling onEvent for each data frame (a text chunk, or
+  // {reset} / {stopped} / {error}); `: keepalive` comments and [DONE] are skipped.
+  async function readEvents(res, onEvent) {
+    const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frameText = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (!frameText.startsWith("data: ")) continue;
+        const data = frameText.slice(6);
+        if (data !== "[DONE]") onEvent(JSON.parse(data));
+      }
+    }
+  }
+
   async function ask(text) {
     text = text.trim();
     const c = active();
@@ -468,25 +486,13 @@ ${clone.outerHTML}
         throw new Error(detail);
       }
 
-      const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const frameText = buf.slice(0, idx); buf = buf.slice(idx + 2);
-          if (!frameText.startsWith("data: ")) continue;  // also skips ": keepalive" comments
-          const data = frameText.slice(6);
-          if (data === "[DONE]") continue;
-          const chunk = JSON.parse(data);
-          if (typeof chunk === "string") answer += chunk;
-          else if (chunk && chunk.reset) answer = "";  // a retry restarted the answer
-          else if (chunk && chunk.stopped) stopped = true;
-          else if (chunk && chunk.error) { answer += `\n\n**Error:** ${chunk.error}`; failed = true; }
-          if (!frame) frame = setTimeout(flush, 80);
-        }
-      }
+      await readEvents(res, (chunk) => {
+        if (typeof chunk === "string") answer += chunk;
+        else if (chunk && chunk.reset) answer = "";  // a retry restarted the answer
+        else if (chunk && chunk.stopped) stopped = true;
+        else if (chunk && chunk.error) { answer += `\n\n**Error:** ${chunk.error}`; failed = true; }
+        if (!frame) frame = setTimeout(flush, 80);
+      });
     } catch (e) {
       if (e.name === "AbortError") aborted = true;
       else { answer += `\n\n**Error:** ${e.message}`; failed = true; }
@@ -506,6 +512,43 @@ ${clone.outerHTML}
       setStreaming(false); renderSidebar();
       els.messages.scrollTop = els.messages.scrollHeight;
     }
+  }
+
+  // Reattach: a conversation saved with a turn in flight (the page was reloaded or
+  // closed mid-answer) gets that answer from the server, or a note that it is gone.
+  async function reattach(c) {
+    const p = c.pending;
+    if (!p || !c.repo) return;
+    state.reattaching.add(c.id); renderComposer();
+    const live = active() === c && state.view === "chat";
+    const bubble = live ? addRow("assistant", "") : null;
+    if (bubble) bubble.classList.add("typing");
+    let answer = "", stopped = false, missing = false, frame = null;
+    const flush = () => { frame = null; if (bubble) { render(bubble, answer); els.messages.scrollTop = els.messages.scrollHeight; } };
+    try {
+      const res = await fetch(`/api/chat/${encodeURIComponent(c.repo)}/${encodeURIComponent(c.id)}/turns/${encodeURIComponent(p.turn_id)}/stream`);
+      if (res.status === 404) missing = true;
+      else if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      else await readEvents(res, (chunk) => {
+        if (typeof chunk === "string") answer += chunk;
+        else if (chunk && chunk.reset) answer = "";
+        else if (chunk && chunk.stopped) stopped = true;
+        else if (chunk && chunk.error) answer += `\n\n**Error:** ${chunk.error}`;
+        if (!frame) frame = setTimeout(flush, 80);
+      });
+    } catch (e) {
+      answer += `\n\n**Error:** ${e.message}`;
+    }
+    if (frame) clearTimeout(frame);
+    let final = missing ? "_(response unavailable)_" : answer;
+    if (stopped) final = (answer ? `${answer}\n\n` : "") + "_(stopped)_";
+    c.messages.push({ role: "assistant", content: final || "(no response)" });
+    c.pending = null;
+    c.resync = true;  // the server's context may differ from what was recovered
+    await persist(c);
+    state.reattaching.delete(c.id);
+    if (active() === c && state.view === "chat") renderMessages();
+    renderComposer();
   }
 
   // Stop asks the server to cancel the turn; its stream then ends with {stopped}. The
@@ -698,5 +741,6 @@ ${clone.outerHTML}
     renderAll(); renderRepoSelect(); loadRepos(); loadHealth(); loadConfig();
     setInterval(loadRepos, 30000);
     setInterval(loadHealth, 5 * 60 * 1000);
+    for (const c of state.conversations.filter((x) => x.pending)) reattach(c);  // in parallel
   })();
 })();

@@ -15,7 +15,7 @@ from temporalio.service import RPCError, RPCStatusCode
 
 import app as app_module
 from chat import constants as C
-from chat.models import SendMessageResult
+from chat.models import SendMessageResult, TurnLookup
 from chat.streaming import turn_key
 
 
@@ -28,6 +28,12 @@ class FakeHandle:
         if self.client.signal_error:
             raise self.client.signal_error
 
+    async def query(self, name, arg, result_type=None):
+        assert name == C.GET_TURN_QUERY
+        if isinstance(self.client.lookup, BaseException):
+            raise self.client.lookup
+        return self.client.lookup
+
 
 class FakeTemporal:
     """Records Update-with-Start calls; `script` decides each call's outcome."""
@@ -37,6 +43,7 @@ class FakeTemporal:
         self.calls = []
         self.signals = []
         self.signal_error = None
+        self.lookup = TurnLookup(found=False)
         self.script = []  # per call: (events to stream, result or exception)
 
     async def execute_update_with_start_workflow(self, update, arg, *, start_workflow_operation, id):
@@ -243,3 +250,53 @@ def test_stop_and_close(api):
 def test_config_reports_the_context_budget(api):
     client, _, _ = api
     assert client.get("/api/config").json()["chat_context_chars"] == app_module.CHAT_CONTEXT_CHARS
+
+
+# ---------------------------------------------------------------------- reattach
+
+def _reattach_url(sid, turn):
+    return f"/api/chat/demo/{sid}/turns/{turn}/stream"
+
+
+def test_reattach_replays_the_stream(api):
+    client, temporal, redis = api
+    sid, turn = str(uuid.uuid4()), str(uuid.uuid4())
+    temporal.lookup = TurnLookup(found=True, answer="Hello world")
+
+    async def fill():
+        for fields in (chunk("Hello "), chunk("world"), {"t": "done", "d": ""}):
+            await redis.xadd(turn_key(turn), fields)
+
+    client.portal.call(fill)
+    assert frames(client.get(_reattach_url(sid, turn))) == ["Hello ", "world", "[DONE]"]
+
+
+def test_reattach_reconciles_and_reports_a_stop(api):
+    client, temporal, redis = api
+    sid, turn, turn2 = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+
+    async def fill():
+        for fields in (chunk("Hel"), {"t": "done", "d": ""}):
+            await redis.xadd(turn_key(turn), fields)
+        for fields in (chunk("so far"), {"t": "done", "d": "stopped"}):
+            await redis.xadd(turn_key(turn2), fields)
+
+    client.portal.call(fill)
+    temporal.lookup = TurnLookup(found=True, answer="Hello")
+    assert frames(client.get(_reattach_url(sid, turn))) == ["Hel", {"reset": True}, "Hello", "[DONE]"]
+    temporal.lookup = TurnLookup(found=True, answer=C.STOPPED_TEXT, stopped=True)
+    assert frames(client.get(_reattach_url(sid, turn2))) == ["so far", {"stopped": True}, "[DONE]"]
+
+
+def test_reattach_without_a_stream_uses_the_recorded_answer(api, monkeypatch):
+    client, temporal, _ = api
+    sid, turn = str(uuid.uuid4()), str(uuid.uuid4())
+    temporal.lookup = TurnLookup(found=True, answer="The answer")
+    assert frames(client.get(_reattach_url(sid, turn))) == ["The answer", "[DONE]"]
+
+    monkeypatch.setattr(app_module, "REATTACH_WAIT_SECONDS", 0)
+    temporal.lookup = TurnLookup(found=False)  # the session never ran this turn
+    assert client.get(_reattach_url(sid, turn)).status_code == 404
+    temporal.lookup = RPCError("not found", RPCStatusCode.NOT_FOUND, b"")  # no session at all
+    assert client.get(_reattach_url(sid, turn)).status_code == 404
+    assert client.get(f"/api/chat/demo/{sid}/turns/nope/stream").status_code == 400
