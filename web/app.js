@@ -294,7 +294,7 @@
       const empty = elt("div", "home-empty");
       empty.append(elt("h2", null, "No indexes yet"),
         elt("p", "muted", canIndex
-          ? "Add a git repository: Code Atlas summarises its files and folders, then answers questions about it."
+          ? "Add a git repository: Code Atlas summarizes its files and folders, then answers questions about it."
           : "Indexing from the UI is off (set REPOS_ROOT in .env). Index a repository with ./scripts/index.sh."));
       if (canIndex) empty.appendChild(button("+ Add index", "primary", () => indexing.openAdd()));
       wrap.appendChild(empty);

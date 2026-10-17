@@ -86,7 +86,7 @@ class GenerationOrchestrator:
         """
         Generate folder summaries bottom-up.
 
-        Each folder is summarised from all of its direct children: the file summaries
+        Each folder is summarized from all of its direct children: the file summaries
         passed in, and child folder summaries generated in this run or, for child
         folders not regenerated, taken from `known_folder_summaries` (stored ones).
         Child folder summaries already cover their own subtrees, so every folder

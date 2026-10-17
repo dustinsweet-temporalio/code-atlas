@@ -89,11 +89,11 @@ def describe(p: Progress, lens: bool = True) -> str:
     """One line: what the run is doing now, with counts."""
     if p.phase == "FILES":
         what = "changed files" if p.plan is not None and p.plan.mode == "incremental" else "files"
-        text = f"Summarising {what}: {p.done:,} of {p.total:,}"
+        text = f"Summarizing {what}: {p.done:,} of {p.total:,}"
     elif p.phase == "LENS_REFRESH":
         text = f"Refreshing the Temporal lens: {p.done:,} of {p.total:,} files"
     elif p.phase == "FOLDERS":
-        text = f"Summarising folders: {p.done:,} of {p.total:,}"
+        text = f"Summarizing folders: {p.done:,} of {p.total:,}"
     elif p.phase == "REPO":
         text = "Writing the repository summary" + (" and its Temporal lens" if lens else "")
     elif p.phase == "PERSIST":

@@ -24,7 +24,7 @@ TIMEOUT_SECONDS = 30
 
 
 class McpError(Exception):
-    """The docs MCP is unreachable, unauthorised, or returned something unusable."""
+    """The docs MCP is unreachable, unauthorized, or returned something unusable."""
 
 
 def _get_json(url: str) -> dict:

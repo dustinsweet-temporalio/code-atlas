@@ -9,7 +9,7 @@ core/sync_steps.py, stages what it generates, and returns a small result.
 
 Errors are translated for Temporal's retry policy: permanent model errors and
 unreadable files are non-retryable; rate limits and other transient model errors
-are retried, honouring a retry-after hint; anything else is retried as-is.
+are retried, honoring a retry-after hint; anything else is retried as-is.
 """
 import contextvars
 import json
@@ -130,7 +130,7 @@ def translated_errors() -> Iterator[None]:
     """
     Raise exceptions as classified ApplicationErrors. The failure keeps one cause (the
     original exception, with its stack trace in our code); the chain beneath it (for
-    a connection error: the SDK's and the HTTP library's exceptions) is summarised in
+    a connection error: the SDK's and the HTTP library's exceptions) is summarized in
     the message instead, so the failure stays under the server's size limit.
     """
     try:

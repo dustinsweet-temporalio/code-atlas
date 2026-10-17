@@ -85,7 +85,7 @@ class ChatActivities:
             return TurnResult(answer="".join(parts))
         except asyncio.CancelledError:
             await pub.done(stopped=True)
-            raise  # the activity shows as cancelled
+            raise  # the activity shows as canceled
         except AgentInputError as e:
             raise ApplicationError(str(e)[:MESSAGE_CHARS], type=C.INVALID_INPUT, non_retryable=True) from None
         except Exception as e:

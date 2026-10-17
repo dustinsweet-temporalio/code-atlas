@@ -4,7 +4,7 @@ The steps of `sync` as stateless functions, called by the Temporal activities
 (semantic_ingress/temporal/activities.py).
 
 The bodies are taken from the in-process sync this replaces (GenerationOrchestrator
-and cli.py): prompts, normalisation, folder-size strategies, lens roll-ups and the
+and cli.py): prompts, normalization, folder-size strategies, lens roll-ups and the
 text-index handling are unchanged. What changed is where results go: generated
 documents are staged (storage/staging_store.py) under the run's `sync_id`, and
 reads that used to come from in-memory dicts read staging first, then the live
@@ -128,7 +128,7 @@ def prompt_version_warnings(store, repo_id: str) -> list[str]:
     versions = store.prompt_versions(repo_id)
     older = sum(v["files"] for v in versions if v["version"] != PROMPT_VERSION)
     if older:
-        return [f"⚠️  {older:,} files were summarised with an older prompt version; changed files use "
+        return [f"⚠️  {older:,} files were summarized with an older prompt version; changed files use "
                 f"version {PROMPT_VERSION}. Run with --force to regenerate every summary."]
     return []
 
@@ -367,7 +367,7 @@ def generate_file(
     path: str,
     blob_oid: str,
 ) -> tuple[StoredDocument, LLMUsage, int | None]:
-    """Summarise one file (plus its lens record when the lens is on). Returns (document, usage, rel)."""
+    """Summarize one file (plus its lens record when the lens is on). Returns (document, usage, rel)."""
     summary, lens, usage = generator.generate_file_summary(path, blob_oid)
     doc = StoredDocument.for_file_summary(
         repo_id=repo_id,
@@ -413,7 +413,7 @@ def generate_folder_from_children(
     child_rollups: dict[str, FolderLensRollup],
 ) -> tuple[FolderSemanticSummary, FolderLensRollup | None, LLMUsage] | None:
     """
-    Summarise one folder from all of its direct children.
+    Summarize one folder from all of its direct children.
 
     Args:
         folder_path: Repository-relative folder ("" for the root)

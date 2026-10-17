@@ -159,7 +159,7 @@ async def test_retries_restart_the_streamed_answer(env, queue, redis, monkeypatc
 
 
 async def test_stop_reaches_an_activity_whose_heartbeat_is_a_child_task(env, queue, redis, monkeypatch):
-    cancelled = asyncio.Event()
+    canceled = asyncio.Event()
     started = asyncio.Event()
 
     async def gen(attempt):
@@ -168,7 +168,7 @@ async def test_stop_reaches_an_activity_whose_heartbeat_is_a_child_task(env, que
         try:
             await asyncio.sleep(60)
         except asyncio.CancelledError:
-            cancelled.set()
+            canceled.set()
             raise
         yield "never"
 
@@ -180,7 +180,7 @@ async def test_stop_reaches_an_activity_whose_heartbeat_is_a_child_task(env, que
         await asyncio.wait_for(started.wait(), 10)
         await s.handle.signal(C.CANCEL_TURN_SIGNAL, turn)
         result = await asyncio.wait_for(pending, 15)
-    assert result.stopped and cancelled.is_set()
+    assert result.stopped and canceled.is_set()
     assert await _events(redis, turn) == [("chunk", "thinking… "), ("done", "stopped")]
 
 

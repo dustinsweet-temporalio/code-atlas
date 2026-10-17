@@ -60,7 +60,7 @@ def _orchestrator() -> GenerationOrchestrator:
     orch.usage_lock, orch.error_lock, orch.progress_lock = Lock(), Lock(), Lock()
     orch.total_usage = LLMUsage(input_tokens=0, output_tokens=0)
     orch.failed_items = []
-    orch.pack = None  # lens off; lens folder behaviour is covered in test_lens_generation.py
+    orch.pack = None  # lens off; lens folder behavior is covered in test_lens_generation.py
     orch.docs_search = None
     orch._reset_lens_state()
     return orch

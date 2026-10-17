@@ -19,7 +19,7 @@ Status: approved (2026-10-16). Scope: the indexer (`semantic_ingress`), the quer
 | Pack in prompt | A cached system prompt, mode-specific. **Conversion view** (~5k tokens): signals, gates, values, patterns and conversion entries with statements. **Evaluation view** (~12k tokens): signals, patterns, limits and checks with statements, plus the file language's `S-*` entries. Mode per file comes from a Temporal-import regex. |
 | Output | Schema-enforced JSON (`output_config.format`), with the schema derived from the Pydantic models. |
 | Caps | Narrative at most 35 words for rel 1 and 55 words for rel 2–3; rel 0 uses the fixed "No durable-execution relevance: ..." form. Retry once only when more than 20% over. |
-| Normalisation | Done in code, not by retry. Drop unknown signal codes and ids, dedupe findings, strip `hazard.*` unless kind includes ORCH/TWF, drop anchorless signals at rel >= 2. Pin rel for Temporal code: TWF/TWORKER = 3; TACT and options = 2 unless the file orchestrates. |
+| Normalization | Done in code, not by retry. Drop unknown signal codes and ids, dedupe findings, strip `hazard.*` unless kind includes ORCH/TWF, drop anchorless signals at rel >= 2. Pin rel for Temporal code: TWF/TWORKER = 3; TACT and options = 2 unless the file orchestrates. |
 | Findings (`f`) | Stored as **leads**. Calibration showed about 50% precision, so the report stage must verify each lead against source lines and the pack statement before stating it. |
 | Storage vs serving | Store full JSON (with line anchors, which BUILD needs). Serve agents a compact line (about 35% fewer tokens, no anchors). |
 | Folder lens | Deterministic roll-up of the whole subtree's file records, plus at most 40 words of prose written in the same folder call, only when a descendant has rel >= 2. |
@@ -82,7 +82,7 @@ Each phase leaves the indexer working and is verifiable on its own.
   - `FolderLens`: rollup stats, plus `n`.
   - `RepoLens`: status, archetype, detected, processes, anti, n, cites.
   - `FileSummaryWithLens`: the combined call schema.
-- **Normaliser and serialiser** (`lens/normalize.py`, `lens/serialize.py`): the rules from the Decisions table; the compact line format exactly as calibrated.
+- **Normalizer and serializer** (`lens/normalize.py`, `lens/serialize.py`): the rules from the Decisions table; the compact line format exactly as calibrated.
 - **LLMClient**:
   - add `system` blocks with `cache_control`;
   - add `output_config.format` (JSON schema from the Pydantic model);
@@ -91,7 +91,7 @@ Each phase leaves the indexer working and is verifiable on its own.
 
 ### Phase 3: lens generation
 
-- **File:** `ArtifactGenerator.generate_file_summary` picks the view (conversion or evaluation, plus language), sends the combined schema, then normalises. Narrative-cap retry happens here, once.
+- **File:** `ArtifactGenerator.generate_file_summary` picks the view (conversion or evaluation, plus language), sends the combined schema, then normalizes. Narrative-cap retry happens here, once.
 - **Folder:**
   - The roll-up is computed in code from the subtree's file lens records (fresh plus stored): count by rel, kind histogram, top signals and concepts, and up to 10 rel-3 paths.
   - The folder prompt receives the compact lens lines of direct children and the child folders' roll-ups, and returns the summary plus the lens `n`.
@@ -103,7 +103,7 @@ Each phase leaves the indexer working and is verifiable on its own.
 - **Pack version handling.** At the start of a sync, compare the installed pack version with `index_meta.pack.version`:
   - **Same version:** normal incremental run.
   - **Different version, no flag:** print a warning: "index lens built with pack X; installed pack is Y. Changed files will use Y. Run with --refresh-lens to update all files." Then run normally. Changed files get version-Y lens records, `lens_pack_versions` shows the mix, and nothing else is regenerated.
-  - **`--refresh-lens`:** the user's explicit choice. It regenerates the lens for every unchanged file through a lens-only schema (no re-summarising, so roughly half the cost of a full index). It then recomputes folder roll-ups and the repo lens and makes `lens_pack_versions` uniform.
+  - **`--refresh-lens`:** the user's explicit choice. It regenerates the lens for every unchanged file through a lens-only schema (no re-summarizing, so roughly half the cost of a full index). It then recomputes folder roll-ups and the repo lens and makes `lens_pack_versions` uniform.
   - **`LENS_ENABLED` turned on for an index built without it:** treated like `--refresh-lens`, but only when the flag is given. Otherwise only changed files get a lens, and the index shows as partial.
 - `--force` also regenerates everything with the installed pack.
 - **Cost estimate:** `estimate` adds the lens cost (cached system-prompt reads plus the extra output per file).
@@ -143,8 +143,8 @@ Each phase leaves the indexer working and is verifiable on its own.
 
 - Add `pytest` (dev dependency) with unit tests for:
   - pack validation and view byte-stability;
-  - normaliser rules (one test per calibration failure);
-  - the compact serialiser;
+  - normalizer rules (one test per calibration failure);
+  - the compact serializer;
   - folder roll-up math;
   - incremental child loading (unchanged siblings present);
   - delta → regenerate set (no stability call);
@@ -317,10 +317,10 @@ Calibration changes, each prompted by a round's results:
 - **Round 1, hard threshold at 5.** All three known answers held. Processes scoring near 5 flipped (4.7→5.4, 4.3→5.0). delivery-matching had no process to assess and gave an empty report.
 - **Round 2.**
   - Added a "borderline" band of ±0.75 around 5 (`margin` in the rubric). It is sized from the measured run-to-run differences of up to 0.7.
-  - Borderline processes get a design, labelled borderline, with what would tip them either way.
+  - Borderline processes get a design, labeled borderline, with what would tip them either way.
   - Discovery falls back to up to 3 relevance-1 entry points when it finds nothing else.
   - Result: every verdict matched across runs. But the delivery-matching card stayed inside its bootstrap file and missed the verified gate.
-- **Round 3.** The investigator was told to follow the process past the entry file. Cards were still built from 1–2 tool calls, and neighbouring verdicts flipped.
+- **Round 3.** The investigator was told to follow the process past the entry file. Cards were still built from 1–2 tool calls, and neighboring verdicts flipped.
 - **Round 4.** A minimum investigation depth was added: an answer before 8 tool calls is sent back once to read the code behind steps, persistence and crash loss. Cards then used 4–17 tool calls.
   - The delivery-matching card covers 7 files and applies G-READONLY.
   - The code-atlas indexing card found that `--rm` removes the temp-dir pickle.
@@ -341,7 +341,7 @@ Round 4 results:
 
 **8f status: not passed as written.** The three known answers held, but in round 4 the chat agent and folder repair each moved between borderline and not suitable. No round, after the borderline band was added, moved a process between suitable and not suitable. Reports cost $0.16 (delivery-matching), $0.62–0.66 (phase3) and $1.27–1.40 (code-atlas).
 
-**8f decision (2026-10-17): passed under an amended criterion.** The criterion is now: the known answers hold, and no process moves between suitable and not suitable across runs. Round 4 meets it. A move between borderline and a neighbouring verdict is accepted, because the borderline label already tells readers a verdict is close. Cached cards make repeated reports on an unchanged index identical. Not adopted: scoring each card three times and taking the median, and widening the band (that would be tuning to three repositories). **Phase 8 is done.**
+**8f decision (2026-10-17): passed under an amended criterion.** The criterion is now: the known answers hold, and no process moves between suitable and not suitable across runs. Round 4 meets it. A move between borderline and a neighboring verdict is accepted, because the borderline label already tells readers a verdict is close. Cached cards make repeated reports on an unchanged index identical. Not adopted: scoring each card three times and taking the median, and widening the band (that would be tuning to three repositories). **Phase 8 is done.**
 
 **Decisions needed:**
 1. **Calibration:** may I adjust the formula weights and anchors during 8f without coming back, provided the final values and the known-answer results are recorded here? (Recommended.)
@@ -390,7 +390,7 @@ An unchanged repository then gives an identical report with no model calls. A ch
 - **Credentials:** `compose.yaml` mounts the Docs MCP credentials directory into the app container, read-write because the client writes back rotated tokens. The app reuses the indexer's Docs MCP client, which is in the same image.
 - **New chat tool,** `search_temporal_docs(query)`, returning passages with their source URLs.
 - **Health check:** `/api/health` reports `temporal_docs` as `connected`, `unavailable` (with the reason and the fix) or `not configured`. Connected means a token refresh and a real search returning at least one docs.temporal.io result. The result is cached for 10 minutes so health polling doesn't search continuously.
-- **Status light in the sidebar,** labelled "Temporal Docs MCP":
+- **Status light in the sidebar,** labeled "Temporal Docs MCP":
   - green dot when connected;
   - red when unavailable, with the reason and `python3 scripts/mcp_login.py` in its tooltip;
   - grey when not configured.

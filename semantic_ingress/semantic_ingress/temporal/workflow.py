@@ -9,7 +9,7 @@ Phases (each resumable from `SyncState` alone):
 
 File, lens and folder work runs in a sliding window of `window_size` activities:
 when one finishes, the next starts. Folders slide within one depth level, deepest
-first, with a barrier between levels, because a folder is summarised from its
+first, with a barrier between levels, because a folder is summarized from its
 child folders. Work items are paged in from staging; summaries never pass through
 the workflow (activities stage them in MongoDB).
 

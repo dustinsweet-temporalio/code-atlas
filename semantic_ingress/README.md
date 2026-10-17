@@ -57,7 +57,7 @@ Documents carry `prose_summary`, repository and path identifiers, timestamps and
 
 ## Notes
 
-- Only committed files at `HEAD` are summarised. The source copy is taken from the working tree.
+- Only committed files at `HEAD` are summarized. The source copy is taken from the working tree.
 - Large eligible files are truncated before analysis; very large folders can get a mechanical stub. See [docs/KNOWN_LIMITATIONS.md](../docs/KNOWN_LIMITATIONS.md).
 - Writes are not one transaction. After a partial failure, re-run `sync`: an interrupted workflow resumes where it stopped, and a finished one with failures is followed by an incremental run that retries them. (`--resume-cache` and the pickle cache were removed.)
 - Reading a bind-mounted repository owned by another user works: libgit2's ownership check is switched off for the indexer.

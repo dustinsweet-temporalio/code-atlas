@@ -52,7 +52,7 @@ class Step(BaseModel):
 
 
 class CrashLoss(BaseModel):
-    stage: str = Field(description="When the crash happens, e.g. 'while files are being summarised'")
+    stage: str = Field(description="When the crash happens, e.g. 'while files are being summarized'")
     loses: str = Field(description="At most 30 words: what is lost or must be repeated")
     refs: list[str]
 

@@ -90,7 +90,7 @@ def _failure(error):
 
 def test_a_long_error_chain_is_trimmed_to_fit_the_failure_size_limit():
     # A connection error arrives wrapped in the SDK's and the HTTP library's exceptions,
-    # each with a long stack trace; serialised whole, it exceeded the server's limit.
+    # each with a long stack trace; serialized whole, it exceeded the server's limit.
     # Distinct frames (as in the HTTP library's stack), so the trace does not collapse.
     namespace: dict = {}
     code = "def frame_0():\n    raise OSError(104, 'Connection reset by peer')\n" + "".join(
@@ -187,7 +187,7 @@ def test_plan_sync_retries_a_database_error_instead_of_reindexing(harness):
     assert e.value.type == "MongoStoreError" and not e.value.non_retryable  # Temporal retries it
     assert harness.staging.plans == {}
 
-    harness.store.fail_queries = 1  # the old, lenient behaviour is kept for other callers
+    harness.store.fail_queries = 1  # the old, lenient behavior is kept for other callers
     assert IncrementalLoader(harness.store).load_previous_snapshot(harness.repo_id) is None
 
 
@@ -252,7 +252,7 @@ class LongRunningWorkflow:
         )
 
 
-async def test_cancelling_the_workflow_stops_the_activity_thread(env):
+async def test_canceling_the_workflow_stops_the_activity_thread(env):
     queue = f"cancel-{uuid.uuid4().hex[:6]}"
     with ThreadPoolExecutor(max_workers=2) as executor:
         async with Worker(env.client, task_queue=queue, workflows=[LongRunningWorkflow],

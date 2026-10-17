@@ -16,7 +16,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from chat import constants as C
 from chat.models import TurnResult
-from tests.chat.conftest import MockTurns, Session, chat_worker, heartbeat_until_cancelled, msgs
+from tests.chat.conftest import MockTurns, Session, chat_worker, heartbeat_until_canceled, msgs
 
 
 def failure_type(e: WorkflowUpdateFailedError) -> str | None:
@@ -112,7 +112,7 @@ async def test_the_validator_rejects_bad_messages_without_history_events(env, qu
 # 7, 8 ------------------------------------------------------------------
 
 async def test_stop_during_a_turn(env, queue):
-    mock = MockTurns(lambda inp, n: heartbeat_until_cancelled())
+    mock = MockTurns(lambda inp, n: heartbeat_until_canceled())
     async with chat_worker(env, queue, [mock.activity()]):
         s = Session(env, queue)
         turn = str(uuid.uuid4())
@@ -157,13 +157,13 @@ class CancelProbe:
             return [type(e).__name__, type(e.cause).__name__, str(isinstance(e.cause, CancelledError))]
 
 
-async def test_a_cancelled_activity_handle_raises_activity_error_caused_by_cancelled_error(env, queue):
+async def test_a_canceled_activity_handle_raises_activity_error_caused_by_canceled_error(env, queue):
     stopped = asyncio.Event()
 
     @activity.defn(name=C.ACTIVITY_RUN_TURN)
     async def run_agent_turn() -> None:
         try:
-            await heartbeat_until_cancelled()
+            await heartbeat_until_canceled()
         finally:
             stopped.set()
 
@@ -291,7 +291,7 @@ async def test_close_while_idle_completes_the_workflow(env, queue):
 
 
 async def test_close_during_a_turn_stops_it_and_rejects_new_messages(env, queue):
-    mock = MockTurns(lambda inp, n: heartbeat_until_cancelled(after_cancel=1.0))
+    mock = MockTurns(lambda inp, n: heartbeat_until_canceled(after_cancel=1.0))
     async with chat_worker(env, queue, [mock.activity()]):
         s = Session(env, queue)
         pending = asyncio.create_task(s.send("q", client_count=0))

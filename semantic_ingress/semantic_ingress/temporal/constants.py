@@ -107,7 +107,7 @@ REPORT_RETRY = RetryPolicy(
 PLAN_TIMEOUT = timedelta(minutes=5)
 WORK_PAGE_TIMEOUT = timedelta(seconds=30)
 FILE_TIMEOUT = timedelta(minutes=10)
-FOLDER_TIMEOUT = timedelta(minutes=20)       # very large folders are summarised in chunks
+FOLDER_TIMEOUT = timedelta(minutes=20)       # very large folders are summarized in chunks
 REPO_SUMMARY_TIMEOUT = timedelta(minutes=10)
 REPO_LENS_TIMEOUT = timedelta(minutes=30)    # tool loop with docs searches
 DELETE_TIMEOUT = timedelta(minutes=2)

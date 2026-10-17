@@ -90,7 +90,7 @@ def test_check_messages():
     assert m(preview(needed=False), False).startswith("Up to date") and "HEAD moved from aaaaaaa" in m(preview(needed=False), False)
     assert "HEAD moved" not in m(preview(needed=False, indexed_commit="b" * 40), False)
     assert m(preview(n_added=2, n_deleted=1), False) == (
-        "Sync needed: 2 added, 1 deleted since aaaaaaa. An incremental sync summarises 2 files.")
+        "Sync needed: 2 added, 1 deleted since aaaaaaa. An incremental sync summarizes 2 files.")
     new = preview(mode="full", indexed_commit=None, reason="nothing is indexed under this name yet")
-    assert m(new, False) == "Not indexed yet. Indexing summarises 10 files at bbbbbbb."
-    assert m(preview(mode="full", reason="--force: replacing the existing index"), True).startswith("A full re-index summarises all 10 files")
+    assert m(new, False) == "Not indexed yet. Indexing summarizes 10 files at bbbbbbb."
+    assert m(preview(mode="full", reason="--force: replacing the existing index"), True).startswith("A full re-index summarizes all 10 files")

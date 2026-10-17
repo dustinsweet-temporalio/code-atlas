@@ -97,7 +97,7 @@ def _print_plan(plan) -> None:
         print(f"  Deleted:   {plan.n_deleted:,} files")
         print(f"  Unchanged: {plan.n_unchanged:,} files")
         print()
-    print(f"Files to summarise: {plan.n_files:,}"
+    print(f"Files to summarize: {plan.n_files:,}"
           + (f" | lens refresh: {plan.n_lens_only:,} unchanged files" if plan.n_lens_only else ""))
     print()
 
@@ -114,7 +114,7 @@ def _render_outcome(outcome, repo_id: str, log) -> int:
     print(f"{'FULL' if plan.mode == 'full' else 'INCREMENTAL'} SYNC COMPLETE")
     print("=" * 80)
     print(f"Files processed:     {outcome.files_done:,}")
-    print(f"Folders summarised:  {outcome.folders_generated:,}")
+    print(f"Folders summarized:  {outcome.folders_generated:,}")
     print(f"Total Input Tokens:  {usage.input_tokens:,}")
     if usage.cache_read_tokens or usage.cache_write_tokens:
         print(f"Cache Read Tokens:   {usage.cache_read_tokens:,}")

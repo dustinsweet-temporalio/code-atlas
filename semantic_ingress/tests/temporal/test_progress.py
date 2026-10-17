@@ -41,8 +41,8 @@ def test_nothing_to_generate_skips_to_the_end_of_generation():
 
 
 def test_descriptions():
-    assert describe(_p("FILES", 3, 10, _plan(mode="incremental"), failed=1)) == "Summarising changed files: 3 of 10 · 1 failed"
-    assert describe(_p("FOLDERS", 1, 4, _plan())) == "Summarising folders: 1 of 4"
+    assert describe(_p("FILES", 3, 10, _plan(mode="incremental"), failed=1)) == "Summarizing changed files: 3 of 10 · 1 failed"
+    assert describe(_p("FOLDERS", 1, 4, _plan())) == "Summarizing folders: 1 of 4"
     assert describe(_p("REPO", plan=_plan()), lens=False) == "Writing the repository summary"
     assert describe(_p("PERSIST", 1200, plan=_plan())) == "Writing to the index: 1,200 documents"
     assert describe(_p("PLAN")) == "Comparing the repository with the index"

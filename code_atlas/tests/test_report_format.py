@@ -14,7 +14,7 @@ CARD = {
     "trigger": {"text": "The sync CLI command.", "refs": ["cli.py@L10-20"]},
     "unit_of_work": {"text": "One LLM call per file.", "refs": ["orch.py@L5"]},
     "scales_with": "files in the repository", "scale_assumption": "Assumes 2,000 files.",
-    "steps": [{"name": "summarise", "does": "Calls the LLM.", "effects": ["paid_call"], "refs": ["orch.py@L30-40"]}],
+    "steps": [{"name": "summarize", "does": "Calls the LLM.", "effects": ["paid_call"], "refs": ["orch.py@L30-40"]}],
     "state_between_steps": {"text": "In memory.", "refs": ["orch.py@L50"]},
     "persistence": {"text": "Written at the end.", "refs": ["cli.py@L90"]},
     "crash_loss": [{"stage": "during generation", "loses": "Everything generated so far.", "refs": ["orch.py@L50"]}],

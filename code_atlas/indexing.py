@@ -223,10 +223,10 @@ def check_message(p, force: bool) -> str:
     files = _plural(p.n_files, "file")
     if p.mode == "full":
         if p.indexed_commit is None and p.reason.startswith("nothing"):
-            return f"Not indexed yet. Indexing summarises {files} at {short}."
+            return f"Not indexed yet. Indexing summarizes {files} at {short}."
         if force:
-            return f"A full re-index summarises all {files} at {short} again and replaces the index."
-        return f"A full re-index is needed ({p.reason}). It summarises {files} at {short}."
+            return f"A full re-index summarizes all {files} at {short} again and replaces the index."
+        return f"A full re-index is needed ({p.reason}). It summarizes {files} at {short}."
     if not p.needed:
         moved = (f" HEAD moved from {p.indexed_commit[:7]} to {short}, but no indexed file changed."
                  if p.indexed_commit and p.indexed_commit != p.commit_sha else "")
@@ -234,7 +234,7 @@ def check_message(p, force: bool) -> str:
     changes = ", ".join(f"{n:,} {label}" for n, label in
                         ((p.n_added, "added"), (p.n_modified, "modified"), (p.n_deleted, "deleted")) if n)
     since = f" since {p.indexed_commit[:7]}" if p.indexed_commit else ""
-    return (f"Sync needed: {changes}{since}. An incremental sync summarises "
+    return (f"Sync needed: {changes}{since}. An incremental sync summarizes "
             f"{_plural(p.n_added + p.n_modified, 'file')}.")
 
 
@@ -434,7 +434,7 @@ async def _outcome(client, execution) -> dict:
     elif o.plan and o.plan.mode == "incremental" and not o.files_done and not o.plan.n_deleted:
         summary = "Already up to date: no file had changed"
     else:
-        summary = f"Indexed: {_plural(o.files_done, 'file')} and {_plural(o.folders_generated, 'folder')} summarised"
+        summary = f"Indexed: {_plural(o.files_done, 'file')} and {_plural(o.folders_generated, 'folder')} summarized"
         if o.plan and o.plan.n_deleted:
             summary += f", {_plural(o.plan.n_deleted, 'deleted file')} removed"
     problems = []

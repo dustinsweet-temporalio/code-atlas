@@ -1,5 +1,5 @@
 """
-Normalise a file lens record written by the index model.
+Normalize a file lens record written by the index model.
 
 Calibration (2026-10-16) showed the model occasionally overshoots caps, invents an
 id, repeats a finding, tags hazards on plain adapters, or leaves a signal without

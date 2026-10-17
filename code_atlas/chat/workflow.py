@@ -164,7 +164,7 @@ class ChatSessionWorkflow:
                         start_to_close_timeout=timedelta(seconds=self._inp.turn_timeout_seconds),
                         heartbeat_timeout=C.HEARTBEAT_TIMEOUT,
                         retry_policy=C.TURN_RETRY,
-                        # The cancelled activity has stopped writing to Redis before the next turn starts.
+                        # The canceled activity has stopped writing to Redis before the next turn starts.
                         cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
                     )
                     result: TurnResult = await self._activity

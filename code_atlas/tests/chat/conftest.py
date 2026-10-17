@@ -92,8 +92,8 @@ def msgs(*pairs):
     return [ChatMessage(role, text) for role, text in pairs]
 
 
-async def heartbeat_until_cancelled(seconds: float = 60, after_cancel: float = 0.0):
-    """Heartbeat as the real activity does, until cancelled (then optionally linger)."""
+async def heartbeat_until_canceled(seconds: float = 60, after_cancel: float = 0.0):
+    """Heartbeat as the real activity does, until canceled (then optionally linger)."""
     try:
         for _ in range(int(seconds * 10)):
             activity.heartbeat()

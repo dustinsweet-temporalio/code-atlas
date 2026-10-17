@@ -4,7 +4,7 @@ These come from the original indexing and query design and were deliberately lef
 
 ## 1. Input is a local git repository at HEAD
 
-The indexer reads the committed tree at `HEAD`. Uncommitted edits and untracked files are not summarised. The source copy is made from the working tree, so uncommitted edits to tracked files can appear in retrieved source while the summaries describe `HEAD`. Keep the working tree clean when indexing.
+The indexer reads the committed tree at `HEAD`. Uncommitted edits and untracked files are not summarized. The source copy is made from the working tree, so uncommitted edits to tracked files can appear in retrieved source while the summaries describe `HEAD`. Keep the working tree clean when indexing.
 
 Eligibility checks exclude non-regular files, detected binaries, files over `INDEX_MAX_FILE_BYTES` (1 MB by default), and files matching `INDEX_EXCLUDE` / `INDEX_EXCLUDE_EXTRA` in `.env`. `.gitignore` is not consulted: anything committed is a candidate unless excluded. File content beyond 525,000 characters is truncated before analysis.
 
@@ -67,7 +67,7 @@ Each conversation is a Temporal session workflow that keeps the recent context (
 - **At most 8 processes per report.** Further processes, and relevance-1 entry points no process covers, are listed but not investigated.
 - **Investigation is bounded.** Each process gets at most 25 tool calls. A card can miss a fact that needs more reading (for example, a launch script that decides where a cache file lives); facts it cannot establish say so, and a card without a persistence or crash-loss fact is marked low confidence.
 - **The scale is assumed.** For a tool, how many units a run has depends on its input, which the code does not show. Each card states its assumption, and the verdict depends on it.
-- **Verdicts near the threshold can change between runs.** Each run investigates and scores again, and a process's overall score moved by up to 0.8 between runs in calibration. Scores within 0.75 of the threshold are labelled borderline. A process near the edge of that band can move between borderline and a neighbouring verdict; calibration saw no move between suitable and not suitable. Cards are reused while their files are unchanged, so repeated reports on an unchanged index give the same verdicts.
+- **Verdicts near the threshold can change between runs.** Each run investigates and scores again, and a process's overall score moved by up to 0.8 between runs in calibration. Scores within 0.75 of the threshold are labeled borderline. A process near the edge of that band can move between borderline and a neighboring verdict; calibration saw no move between suitable and not suitable. Cards are reused while their files are unchanged, so repeated reports on an unchanged index give the same verdicts.
 - **Uncited prose.** Bar reasons, design elements and reasons for unsuitability must cite a pack entry or a docs page, or they are dropped. The verdict paragraphs and the removes/stays lists are not cited item by item.
 - **Only the latest report is kept.** Rebuilding replaces it; earlier reports are not stored.
 - **Docs search in chat uses your personal sign-in.** The app container reads the same refresh token as the indexer. If the sign-in expires, the sidebar light turns red and chat says it cannot search the docs; run `python3 scripts/mcp_login.py`, then restart the app.
