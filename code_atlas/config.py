@@ -48,6 +48,10 @@ DIR_LIST_COLLECTION = "repo_summaries"
 INDEX_META_COLLECTION = "index_meta"
 # The Temporal report the indexer stores (one document per repository)
 REPORTS_COLLECTION = "reports"
+# Compass Web (the compose `compass` service): its address inside the network, used to
+# look up its connection id, and its address in the browser. Blank turns the button off.
+COMPASS_URL = _env("COMPASS_URL", "")
+COMPASS_PUBLIC_URL = _env("COMPASS_PUBLIC_URL", "")
 
 # ============================================================================
 # SOURCE CODE STORAGE CONFIGURATION

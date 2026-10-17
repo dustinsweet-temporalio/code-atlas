@@ -8,6 +8,7 @@ Serves the chat UI and a small API:
     GET  /api/repos    indexed repositories
     GET  /api/report/{repo_id}  the stored Temporal report (data for the report view)
     GET  /api/report/{repo_id}/markdown  the detailed report as Markdown (as ./scripts/report.sh writes it)
+    GET  /api/compass/{repo_id}  the Compass Web URL that opens this index's database
     POST /api/chat     streaming (SSE) answer for a conversation about one index ({repo_id, messages})
 
 Run with: uvicorn app:app --host 0.0.0.0 --port 8080
@@ -16,8 +17,10 @@ import json
 import logging
 import os
 import re
+import urllib.request
 from pathlib import Path
 from typing import List, Literal
+from urllib.parse import quote
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
@@ -25,6 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from config import (
+    COMPASS_PUBLIC_URL,
+    COMPASS_URL,
     DB_PREFIX,
     FILE_SUMMARIES_COLLECTION,
     FOLDER_SUMMARIES_COLLECTION,
@@ -180,6 +185,34 @@ def get_report_markdown(repo_id: str):
             logger.error(f"Failed to render the detailed report for {repo_id}: {e}", exc_info=True)
             return JSONResponse({"error": f"Could not render the detailed report: {e}"}, status_code=500)
     return PlainTextResponse(markdown, media_type="text/markdown")
+
+
+@app.get("/api/compass/{repo_id}")
+def compass_link(repo_id: str):
+    """
+    Where Compass Web shows this index's database: <public url>/<connection id>/<database>.
+
+    Compass Web gives its connection a new random id each time it starts, so the id is
+    looked up from the service on every request rather than built into the UI.
+    """
+    if not re.match(r"^[A-Za-z0-9_-]+$", repo_id):
+        return JSONResponse({"error": "Invalid index name."}, status_code=400)
+    if not (COMPASS_URL and COMPASS_PUBLIC_URL):
+        return JSONResponse({"error": "Compass Web is not configured (COMPASS_URL, COMPASS_PUBLIC_URL)."}, status_code=404)
+    is_valid, _, error = validate_repository(repo_id)
+    if not is_valid:
+        return JSONResponse({"error": f"Index '{repo_id}' is not available: {error}"}, status_code=404)
+    try:
+        with urllib.request.urlopen(f"{COMPASS_URL.rstrip('/')}/api/connection-info", timeout=5) as res:
+            connections = json.load(res)
+        connection_id = connections[0]["id"]
+    except Exception as e:
+        logger.error(f"Compass Web lookup failed: {e}")
+        return JSONResponse({"error": f"Compass Web is not reachable ({e}). Is the compass service running? "
+                                      "docker compose up -d compass"}, status_code=503)
+    database = f"{DB_PREFIX}_{repo_id}"
+    return {"url": f"{COMPASS_PUBLIC_URL.rstrip('/')}/{quote(connection_id, safe='')}/{quote(database, safe='')}",
+            "database": database}
 
 
 @app.post("/api/chat")

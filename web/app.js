@@ -11,7 +11,7 @@
     status: $("status"), banner: $("banner"), docsStatus: $("docs-status"), docsStatusText: $("docs-status-text"), header: $("chat-header"), chatRepo: $("chat-repo"),
     chatRepoMeta: $("chat-repo-meta"), reportToggle: $("report-toggle"), reportView: $("report-view"),
     reportActions: $("report-actions"), reportSummary: $("report-summary"), reportDetailed: $("report-detailed"),
-    reportDownload: $("report-download"), temporalLink: $("temporal-ui-link"),
+    reportDownload: $("report-download"), compassOpen: $("compass-open"), temporalLink: $("temporal-ui-link"),
   };
 
   // ---- storage (per-browser; every access guarded) ----
@@ -29,6 +29,24 @@
     report: null,
   };
 
+  // ---- clipboard ----
+  // navigator.clipboard needs a secure context (https or localhost); the fallback covers
+  // the app opened over plain http on another host.
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return; } catch { /* fall back */ }
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) throw new Error("copy failed");
+  }
+  const copyButton = (btn, getText, label = "Copy") => {
+    btn.onclick = () => copyText(getText())
+      .then(() => { btn.textContent = "Copied"; }, () => { btn.textContent = "Copy failed"; })
+      .finally(() => setTimeout(() => (btn.textContent = label), 1200));
+  };
+
   // ---- markdown ----
   marked.setOptions({ gfm: true, breaks: false });
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -42,8 +60,7 @@
       if (code) hljs.highlightElement(code);
       const btn = document.createElement("button");
       btn.className = "copy"; btn.type = "button"; btn.textContent = "Copy";
-      btn.onclick = () => navigator.clipboard.writeText(code ? code.innerText : pre.innerText)
-        .then(() => { btn.textContent = "Copied"; setTimeout(() => (btn.textContent = "Copy"), 1200); });
+      copyButton(btn, () => (code ? code.innerText : pre.innerText));
       pre.appendChild(btn);
     });
   };
@@ -113,17 +130,27 @@
     if (!c) return;
     els.chatRepo.textContent = c.repo || "none recorded";
     els.reportToggle.hidden = !c.repo;
+    els.compassOpen.hidden = !c.repo;
     const r = c.repo && state.repos.get(c.repo);
     els.chatRepoMeta.textContent = r ? repoMeta(r)
       : c.repo ? (state.repos.size ? "no longer indexed" : "")
       : "This conversation was started before indexes were chosen up front. Start a new chat to continue.";
   }
 
+  // A message row. Its Copy button copies the message as written (Markdown source for
+  // answers), read from bubble.source so a streamed answer can set it when it finishes.
   function addRow(role, text) {
     const row = document.createElement("div"); row.className = "row " + role;
     const bubble = document.createElement("div"); bubble.className = "bubble";
     if (role === "assistant") render(bubble, text); else bubble.textContent = text;
-    row.appendChild(bubble); els.messages.appendChild(row);
+    bubble.source = text;
+    const actions = document.createElement("div"); actions.className = "msg-actions";
+    const copy = document.createElement("button");
+    copy.type = "button"; copy.className = "msg-copy"; copy.textContent = "Copy";
+    copy.title = role === "user" ? "Copy this prompt" : "Copy this response as Markdown";
+    copyButton(copy, () => bubble.source);
+    actions.appendChild(copy);
+    row.append(bubble, actions); els.messages.appendChild(row);
     return bubble;
   }
 
@@ -312,6 +339,32 @@ ${clone.outerHTML}
 `);
   }
 
+  // ---- Compass Web (the chat's index in the compose `compass` service) ----
+  // The tab is opened on the click itself (so it is not blocked as a popup), then sent to
+  // the URL the server looks up; if the lookup fails, the tab says why.
+  const compassTitle = els.compassOpen.title;
+  async function openCompass() {
+    const c = active();
+    if (!c || !c.repo) return;
+    els.compassOpen.title = compassTitle;
+    const tab = window.open("", "_blank");
+    if (tab) { tab.opener = null; tab.document.title = "Opening Compass…"; tab.document.body.textContent = "Opening Compass…"; }
+    let error;
+    try {
+      const res = await fetch(`/api/compass/${encodeURIComponent(c.repo)}`);
+      const body = await res.json();
+      if (res.ok) {
+        if (tab) tab.location.replace(body.url); else window.open(body.url, "_blank", "noopener");
+        return;
+      }
+      error = body.error || `Server returned ${res.status}`;
+    } catch (e) {
+      error = e.message;
+    }
+    if (tab) { tab.document.title = "Compass unavailable"; tab.document.body.textContent = `Could not open Compass: ${error}`; }
+    els.compassOpen.title = `Could not open Compass: ${error}`;
+  }
+
   // ---- chat ----
   function setStreaming(on) {
     state.streaming = on;
@@ -369,6 +422,7 @@ ${clone.outerHTML}
     } finally {
       if (frame) clearTimeout(frame);
       bubble.classList.remove("typing"); render(bubble, answer || "_(no response)_");
+      bubble.source = answer || "(no response)";
       c.messages.push({ role: "assistant", content: answer || "(no response)" });
       save(); setStreaming(false); renderSidebar();
       els.messages.scrollTop = els.messages.scrollHeight;
@@ -506,6 +560,7 @@ ${clone.outerHTML}
   els.reportSummary.addEventListener("click", () => { if (state.report?.mode !== "summary") showReportMode("summary"); });
   els.reportDetailed.addEventListener("click", () => { if (state.report?.mode !== "detailed") showReportMode("detailed"); });
   els.reportDownload.addEventListener("click", downloadReport);
+  els.compassOpen.addEventListener("click", openCompass);
 
   els.repoSelect.addEventListener("change", () => {
     state.selected = els.repoSelect.value; saveSelected(state.selected);

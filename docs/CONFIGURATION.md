@@ -37,9 +37,10 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `APP_PORT` | `8090` | compose | Host port for the UI (bound to localhost) |
 | `TEMPORAL_PORT` | `7233` | compose | Host port for the Temporal server (gRPC, bound to localhost) |
 | `TEMPORAL_UI_PORT` | `8233` | compose | Host port for the Temporal UI (bound to localhost) |
+| `COMPASS_PORT` | `8096` | compose | Host port for Compass Web (bound to localhost), opened by **Open in Compass** |
 | `LOG_LEVEL` | `INFO` | app | Query-side log level |
 
-Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`.
+Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`.
 
 ## Changing models
 
