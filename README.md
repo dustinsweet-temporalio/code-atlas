@@ -8,16 +8,27 @@ Everything runs locally in Docker. What leaves your machine: the LLM calls, whic
 
 ```sh
 cp .env.example .env          # then set ANTHROPIC_API_KEY in .env
-docker compose up --build -d  # MongoDB, the Temporal dev server and the web app
+docker compose up --build -d  # MongoDB, the Temporal dev server, the indexing worker and the web app
 python3 scripts/mcp_login.py  # one-time sign-in to the Temporal Docs MCP (for the Temporal lens)
-./scripts/index.sh /path/to/your/repo [name]
 ```
 
 Skip the sign-in by setting `LENS_ENABLED=false` in `.env` if you do not want the Temporal lens.
 
-Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`), select an index on the left, click **New chat**, and ask your question. Each conversation stays with the index it was started on; the index is shown above the chat and under the conversation's name. Every prompt and answer has a **Copy** button (answers copy as Markdown, ready to paste into Claude Code), and **Open in Compass** above the chat opens the index's database in Compass Web. Indexing runs are visible in the Temporal UI at <http://localhost:8233> (the **Temporal UI** link at the bottom of the sidebar).
+Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`). The page opens on your indexes. Click **+ Add index**, choose a git repository, and start indexing (see [Indexing a repository](#indexing-a-repository)). When it is done, click the index (or pick it in the sidebar) and ask your question. Each conversation stays with the index it was started on; the index is shown above the chat and under the conversation's name, and a conversation is saved when you send its first question. Every prompt and answer has a **Copy** button (answers copy as Markdown, ready to paste into Claude Code), and **Open in Compass** above the chat opens the index's database in Compass Web. Indexing runs are visible in the Temporal UI at <http://localhost:8233> (the **Temporal UI** link at the bottom of the sidebar).
 
 ## Indexing a repository
+
+### From the UI
+
+- **Add an index:** click **+ Add index**, then type the repository's folder or pick it with **Browse…** (git repositories are marked). The folder must contain `.git`; any other folder is refused. Name the index (it defaults to the folder name). **Cached copy** shows where the mirrored source will live (in the `source-data` volume) and which MongoDB database holds the summaries.
+- **Sync an index:** select it and click **Sync…** (or **Sync…** on its card on the home page). The folder it was indexed from is filled in. Choose **Incremental** (only files whose content changed) or **Force full re-index**.
+- **Check whether a sync is needed:** **Check whether a sync is needed** compares the blob hash of every eligible file at `HEAD` with what the index holds, and says what a sync would summarise. It makes no model calls.
+- **Progress:** when you start, the dialog closes and a progress bar appears above the main view with a one-line description (for example "Summarising files: 132 of 480") and the overall percentage. **Temporal ↗** opens the run in the Temporal UI in a new tab. When the run ends the bar says what it did and what it cost; **Open chat** starts a chat about the index. Runs started with `index.sh` show there too.
+- **Delete an index:** **Delete…** (in the sidebar or on its card) asks for confirmation, then removes the index's summaries, Temporal report and cached source. Your repository is not touched.
+
+The UI can index repositories under `REPOS_ROOT` (default: your home directory), which compose mounts read-only into the app and the indexing worker at the same path. Before a run starts, the same preflight as `index.sh` runs, and a failure is shown in the dialog. Syncs started here are run by the `index-worker` service; if it restarts, it picks them up again. For `--dry-run`, `--refresh-lens`, `--no-report` or `--window-size`, use the command line.
+
+### From the command line
 
 ```sh
 ./scripts/index.sh ~/code/my-service                 # indexed as "my-service"
@@ -35,7 +46,7 @@ The script mounts your folder read-only into the indexer container, so nothing i
 
 ### Indexing runs on Temporal
 
-Each run is a Temporal workflow, `sync-<name>`, on the Temporal dev server in `compose.yaml`. The indexer container runs the worker for as long as `index.sh` runs, and prints a link to the workflow in the Temporal UI (<http://localhost:8233>), where you can follow every file, folder and retry.
+Each run is a Temporal workflow, `sync-<name>`, on the Temporal dev server in `compose.yaml`. For a run started with `index.sh`, the indexer container runs the worker for as long as `index.sh` runs, and prints a link to the workflow in the Temporal UI (<http://localhost:8233>), where you can follow every file, folder and retry. Runs started from the UI are run by the `index-worker` service, which runs a worker for each of them.
 
 - **Resume:** if a run crashes, the container is killed, or you press Ctrl-C, run the same `index.sh` command again. It attaches to the running workflow (with the options it was started with) and carries on; finished summaries are not generated or paid for again. Only one run per name can be in progress.
 - **Throughput:** up to 5 file or folder summaries are generated at a time (`INDEX_WINDOW_SIZE` in `.env`, or `--window-size`). The old default was 8 parallel calls, so a run with default settings takes somewhat longer than before; raise the window if your rate limits allow. `--max-workers` still works as an alias.
@@ -124,6 +135,7 @@ Questions are answered by an agent that starts at the repository's root summary,
 
 - Summaries live in the `mongo-data` Docker volume; mirrored source in `source-data`; Temporal workflow history in `temporal-data`.
 - `docker compose down` stops everything and keeps your data. `docker compose down -v` also **deletes the index and the mirrored source**.
+- Delete an index with **Delete…** in the UI. Its Temporal workflow history stays in the Temporal UI.
 - MongoDB is not published to your host. To look at what an index stores (summaries, lenses, reports), click **Open in Compass** above a chat, or open Compass Web at <http://localhost:8096> (change the port with `COMPASS_PORT` in `.env`). Compass Web is a community build of Compass's web UI (`haohanyang/compass-web`), not an official MongoDB image, and it can edit data as well as view it. For a shell: `docker compose exec mongo mongosh`.
 - Maintenance commands (run through `docker compose run --rm indexer <command> ...`): `sync`, `report`, `preflight`, `estimate`, `dir-list-only`, `source-mirror`. Add `--help` to any of them.
 - Temporal reports are written to `reports/<name>/` in this folder (ignored by git).
@@ -139,6 +151,8 @@ Questions are answered by an agent that starts at the repository's root summary,
 - **A run was interrupted**: run the same `index.sh` command again; it resumes the workflow. To abandon it instead, terminate `sync-<name>` in the Temporal UI (staged summaries are removed after 7 days).
 - **Summaries look truncated or JSON errors during indexing**: raise `INDEX_MAX_TOKENS` or lower `INDEX_EFFORT`.
 - **"Not a valid Git repository"**: pass the repository root (the folder that contains `.git`).
+- **UI: "Only folders under … can be indexed"**: the UI only sees `REPOS_ROOT` (default: your home directory). Set `REPOS_ROOT` in `.env` to a folder that contains your repositories, then `docker compose up -d`.
+- **UI: the progress bar says "Waiting for the indexer worker"**: the `index-worker` service is not running (`docker compose up -d index-worker`). If the bar says the worker cannot run the sync, the reason follows (often the Temporal Docs MCP sign-in; see below); fix it and the worker retries within a minute. `docker compose logs index-worker` has the details.
 - **Preflight: `No Temporal Docs MCP credentials` or `token refresh refused`**: run `python3 scripts/mcp_login.py` (or set `LENS_ENABLED=false`).
 - **Preflight: canary search returned too few results**: the Temporal Docs MCP is degraded; try again later.
 - **UI shows `pack 0.1.0 + 0.1.1` or `(partial)`**: some files carry an older lens or none; index again with `--refresh-lens`.

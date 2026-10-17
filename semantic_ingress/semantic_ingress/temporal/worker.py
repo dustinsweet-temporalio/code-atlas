@@ -1,10 +1,11 @@
 """
 The worker `sync` embeds for the duration of a run.
 
-It runs inside the indexer container because the activities need the repository
-bind-mounted at /repos/<name> and the source-data volume. It polls a per-repository
-task queue, so a worker started for another repository never picks up this one's
-activities.
+It runs where the repository is on disk (bind-mounted into the indexer container by
+index.sh, or under REPOS_ROOT in the `index-worker` service, which builds one per sync
+started from the web UI; see service.py) and needs the source-data volume. It polls a
+per-repository task queue, so a worker started for another repository never picks up
+this one's activities.
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta

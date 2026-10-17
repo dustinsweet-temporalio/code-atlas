@@ -1,6 +1,6 @@
 # Configuration
 
-All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose passes the file to both the app and the indexer containers. Optional settings are only sent to the API when they are not blank.
+All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose passes the file to the app, the indexing worker and the indexer containers. Optional settings are only sent to the API when they are not blank.
 
 | Setting | Default | Used by | Purpose |
 | --- | --- | --- | --- |
@@ -38,6 +38,7 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `TEMPORAL_PORT` | `7233` | compose | Host port for the Temporal server (gRPC, bound to localhost) |
 | `TEMPORAL_UI_PORT` | `8233` | compose | Host port for the Temporal UI (bound to localhost) |
 | `COMPASS_PORT` | `8096` | compose | Host port for Compass Web (bound to localhost), opened by **Open in Compass** |
+| `REPOS_ROOT` | your home directory | compose (app, index-worker) | Folder under which the UI can index repositories. Mounted read-only at the same path into the app (folder picker, sync check) and the `index-worker` service (indexing) |
 | `LOG_LEVEL` | `INFO` | app | Query-side log level |
 | `CHAT_IDLE_HOURS` | `24` | app | A chat session workflow ends after this long without a message; the next message starts a new one from the browser's copy |
 | `CHAT_CONTEXT_CHARS` | `240000` | app, browser | Characters of conversation sent to the model and kept by the session (oldest messages dropped first; the browser keeps everything) |
@@ -47,7 +48,7 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `CHAT_TASK_QUEUE` | `code-atlas-chat` | app, chat-worker | Temporal task queue for chat sessions |
 | `REDIS_URL` | `redis://redis:6379/0` | app, chat-worker | Redis for chat token streams (set by compose) |
 
-Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`, `REDIS_URL=redis://redis:6379/0`.
+Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`, `REDIS_URL=redis://redis:6379/0`, `REPOS_ROOT` (blank means `$HOME`), `HOST_HOME=$HOME` (so `~` typed in the UI means your home directory).
 
 ## Changing models
 
@@ -76,3 +77,4 @@ If a request fails with a 400, the error names the rejected parameter. Also upda
 | Report rubric | `knowledge/temporal-rubric.yaml`, built into the image at `/app/knowledge` |
 | Sync workflow history | `temporal-data` volume (the dev server's SQLite file) |
 | Staged summaries of a sync in progress | `code_atlas_ingest` database (MongoDB); removed when the run finishes, or after 7 days for an abandoned run |
+| Why the worker service cannot run a UI sync | `worker_status` collection in `code_atlas_ingest`, one document per index; cleared when the run starts, or when the index is deleted |

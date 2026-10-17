@@ -428,6 +428,31 @@ def sync(
 
 @cli.command()
 @click.option(
+    "--prefix",
+    type=str,
+    default=DEFAULT_PREFIX,
+    show_default=True,
+    help="Database name prefix (must start with 'sem'). Defaults to DB_PREFIX.",
+)
+def worker(prefix: str) -> None:
+    """
+    Run the indexing worker for syncs started from the web UI (the compose `index-worker`
+    service). It runs each such sync until it finishes, and resumes running ones
+    after a restart. Syncs started with `sync` run in that command instead.
+    """
+    from semantic_ingress.temporal.service import serve
+
+    # As PID 1 in a container, the process gets no default SIGTERM handling. Exit at once:
+    # the workflows live on the server, and in-flight activities are retried on restart.
+    signal.signal(signal.SIGTERM, lambda signum, frame: os._exit(0))
+    try:
+        asyncio.run(serve(prefix))
+    except KeyboardInterrupt:
+        pass
+
+
+@cli.command()
+@click.option(
     "--repo-path",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     required=True,

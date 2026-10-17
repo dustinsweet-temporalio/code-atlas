@@ -60,6 +60,16 @@ COMPASS_PUBLIC_URL = _env("COMPASS_PUBLIC_URL", "")
 SOURCE_DIR = _env("SOURCE_DIR", "/data/source")
 
 # ============================================================================
+# INDEXING FROM THE UI
+# ============================================================================
+# Folder under which the UI can pick repositories to index. compose mounts it read-only at
+# the same path in the app and the `index-worker` service, so host paths work as they are.
+# Blank turns indexing from the UI off.
+REPOS_ROOT = _env("REPOS_ROOT", "")
+# The host user's home directory, so "~/code/x" typed in the UI means the host's ~.
+HOST_HOME = _env("HOST_HOME", "")
+
+# ============================================================================
 # CHAT SESSIONS (Temporal + Redis)
 # ============================================================================
 # Each conversation is a Temporal workflow; the chat-worker service runs its turns and

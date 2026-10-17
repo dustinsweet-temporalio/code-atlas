@@ -10,11 +10,18 @@
 </head>
 <body>
   <aside id="sidebar">
-    <div class="brand">Code Atlas</div>
+    <button id="home" class="brand" type="button" title="All indexes">Code Atlas</button>
 
-    <h2><label for="repo-select">Index</label></h2>
+    <div class="side-head">
+      <h2><label for="repo-select">Index</label></h2>
+      <button id="add-index" class="link" type="button" title="Index a git repository">+ Add index</button>
+    </div>
     <select id="repo-select"><option value="">Loading…</option></select>
     <div id="repo-meta" class="muted"></div>
+    <div id="repo-actions" class="repo-actions" hidden>
+      <button id="sync-index" class="ghost" type="button">Sync…</button>
+      <button id="delete-index" class="ghost danger" type="button">Delete…</button>
+    </div>
     <button id="new-chat" class="primary" disabled title="Select an index first">+ New chat</button>
 
     <h2>Conversations</h2>
@@ -32,6 +39,8 @@
 
   <main>
     <div id="banner" hidden></div>
+    <section id="sync-panel" class="sync-panel" aria-label="Indexing progress" tabindex="-1" hidden></section>
+    <section id="home-view" class="home-view" hidden></section>
     <header id="chat-header" hidden>
       <span class="label">Index</span>
       <strong id="chat-repo"></strong>
@@ -56,11 +65,91 @@
     </form>
   </main>
 
+  <dialog id="index-dialog" class="modal" aria-labelledby="ix-title">
+    <form id="index-form" novalidate>
+      <header class="modal-head">
+        <h2 id="ix-title">Add an index</h2>
+        <button type="button" class="icon" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="field">
+          <label for="ix-path">Repository folder</label>
+          <div class="path-row">
+            <input id="ix-path" type="text" spellcheck="false" autocomplete="off" placeholder="/Users/you/code/my-service">
+            <button id="ix-browse" type="button" class="ghost" aria-expanded="false" aria-controls="ix-browser">Browse…</button>
+          </div>
+          <div id="ix-browser" class="browser" hidden>
+            <div class="browser-head">
+              <button id="ix-up" type="button" class="ghost small" title="Parent folder">↑</button>
+              <code id="ix-cwd"></code>
+            </div>
+            <ul id="ix-entries" class="browser-list" aria-label="Folders"></ul>
+            <div class="browser-foot">
+              <span id="ix-browser-note" class="muted"></span>
+              <button id="ix-use" type="button" class="primary small">Use this folder</button>
+            </div>
+          </div>
+          <p id="ix-path-status" class="field-note" aria-live="polite"></p>
+        </div>
+        <div class="field">
+          <label for="ix-name">Index name</label>
+          <input id="ix-name" type="text" spellcheck="false" autocomplete="off" maxlength="64">
+          <p id="ix-name-status" class="field-note muted">Letters, numbers, - and _. This is how the index appears in Code Atlas.</p>
+        </div>
+        <div class="field">
+          <label for="ix-cache">Cached copy</label>
+          <input id="ix-cache" type="text" readonly>
+          <p class="field-note muted">Where the mirrored source files the assistant reads are kept, in the <code>source-data</code> Docker volume. Summaries go to the MongoDB database <code id="ix-db"></code>.</p>
+        </div>
+        <fieldset id="ix-mode" class="field modes" hidden>
+          <legend>Sync type</legend>
+          <label class="radio">
+            <input type="radio" name="mode" value="incremental" checked>
+            <span><strong>Incremental</strong><span class="muted">Summarise only the files whose content changed since the last sync.</span></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="mode" value="force">
+            <span><strong>Force full re-index</strong><span class="muted">Summarise every file again and replace the index. Costs about as much as the first index.</span></span>
+          </label>
+        </fieldset>
+        <div class="check">
+          <button id="ix-check" type="button" class="ghost">Check whether a sync is needed</button>
+          <div id="ix-check-result" class="check-result" aria-live="polite" hidden></div>
+        </div>
+        <p id="ix-error" class="form-error" role="alert" hidden></p>
+      </div>
+      <footer class="modal-foot">
+        <span class="muted small">Only committed files at HEAD are indexed.</span>
+        <button type="button" data-close>Cancel</button>
+        <button id="ix-start" type="submit" class="primary">Start indexing</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="delete-dialog" class="modal narrow" aria-labelledby="del-title">
+    <form id="delete-form">
+      <header class="modal-head">
+        <h2 id="del-title">Delete index</h2>
+        <button type="button" class="icon" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <p>This permanently deletes the summaries, the Temporal report and the cached copy of the source of <strong id="del-name"></strong>. Your repository is not touched, and you can index it again later.</p>
+        <p id="del-convs" class="muted"></p>
+        <p id="del-error" class="form-error" role="alert" hidden></p>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" data-close autofocus>Cancel</button>
+        <button id="del-confirm" type="submit" class="danger">Delete index</button>
+      </footer>
+    </form>
+  </dialog>
+
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/purify.min.js"></script>
   <script src="vendor/highlight.min.js"></script>
   <script src="report.js"></script>
   <script src="store.js"></script>
+  <script src="indexing.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -179,6 +179,70 @@ def delta_from_plan(plan: dict) -> SnapshotDelta | None:
     return SnapshotDelta(old_commit=d["old_commit"], new_commit=d["new_commit"], changes=changes)
 
 
+@dataclass
+class _Comparison:
+    """HEAD against the index: what plan_sync and preview_sync both start from."""
+
+    commit_sha: str
+    snapshot: RepositorySnapshot
+    old_snapshot: RepositorySnapshot | None   # None: a full index (nothing indexed, or a reset)
+    indexed: bool                             # the index has file summaries
+    reset_reason: str | None
+    delta: SnapshotDelta | None
+
+
+def _compare_with_index(store, git: GitAdapter, repo_id: str, force: bool) -> _Comparison:
+    """Pin HEAD and compare it with the index (strictly: a database error raises)."""
+    commit_sha = git.get_head_sha()
+    snapshot = git.get_snapshot(commit_sha)
+    old_snapshot = IncrementalLoader(store).load_previous_snapshot(repo_id, strict=True)
+    indexed = old_snapshot is not None
+    reset_reason = full_reindex_reason(store, repo_id, old_snapshot, force)
+    if reset_reason:
+        old_snapshot = None
+    delta = SnapshotComparer().compare(old_snapshot, snapshot) if old_snapshot is not None else None
+    return _Comparison(commit_sha, snapshot, old_snapshot, indexed, reset_reason, delta)
+
+
+@dataclass
+class SyncPreview:
+    """What a sync would do now, without staging or generating anything (the UI's check)."""
+
+    commit_sha: str
+    indexed_commit: str | None   # the commit the index was last built from
+    mode: str                    # "full" | "incremental"
+    reason: str
+    needed: bool                 # False: the index already matches HEAD
+    n_files: int                 # files at HEAD that would be indexed
+    n_added: int = 0
+    n_modified: int = 0
+    n_deleted: int = 0
+    n_unchanged: int = 0
+
+
+def preview_sync(store, git: GitAdapter, repo_id: str, force: bool = False) -> SyncPreview:
+    """
+    Compare HEAD's eligible files (by blob hash) with what the index holds, as plan_sync
+    does, and say whether a sync would change anything. Reads only; no model calls.
+    """
+    c = _compare_with_index(store, git, repo_id, force)
+    meta = store.get_index_meta(repo_id) or {}
+    n_files = len(c.snapshot.files)
+    if c.delta is None:
+        reason = c.reset_reason or "nothing is indexed under this name yet"
+        return SyncPreview(
+            commit_sha=c.commit_sha, indexed_commit=meta.get("commit_sha"), mode="full",
+            reason=reason, needed=True, n_files=n_files,
+        )
+    d = c.delta
+    changed = len(d.added) + len(d.modified) + len(d.deleted)
+    return SyncPreview(
+        commit_sha=c.commit_sha, indexed_commit=meta.get("commit_sha") or c.old_snapshot.commit_sha,
+        mode="incremental", reason="comparing index vs Git state", needed=changed > 0, n_files=n_files,
+        n_added=len(d.added), n_modified=len(d.modified), n_deleted=len(d.deleted), n_unchanged=len(d.unchanged),
+    )
+
+
 def plan_sync(
     config: IngestionConfig,
     pack: Pack | None,
@@ -196,13 +260,8 @@ def plan_sync(
     retried) instead of silently choosing a full re-index.
     """
     repo_id = config.repo_id or "unknown"
-    commit_sha = git.get_head_sha()
-    snapshot = git.get_snapshot(commit_sha)
-
-    old_snapshot = IncrementalLoader(store).load_previous_snapshot(repo_id, strict=True)
-    reset_reason = full_reindex_reason(store, repo_id, old_snapshot, params.force)
-    if reset_reason:
-        old_snapshot = None
+    c = _compare_with_index(store, git, repo_id, params.force)
+    commit_sha, snapshot, old_snapshot, reset_reason = c.commit_sha, c.snapshot, c.old_snapshot, c.reset_reason
 
     warnings: list[str] = []
     delta: SnapshotDelta | None = None
@@ -217,7 +276,7 @@ def plan_sync(
         reason = "comparing index vs Git state"
         warnings += pack_version_warnings(store, repo_id, pack, params.refresh_lens)
         warnings += prompt_version_warnings(store, repo_id)
-        delta = SnapshotComparer().compare(old_snapshot, snapshot)
+        delta = c.delta
         to_generate = sorted({c.path for c in delta.added} | {c.path for c in delta.modified})
         deleted_paths = sorted(c.path for c in delta.deleted)
         if params.refresh_lens and pack is not None:
@@ -755,6 +814,7 @@ def build_index_meta(config: IngestionConfig, pack: Pack | None, commit_sha: str
         repo_id=repo_id,
         index_model=config.llm.model_id,
         commit_sha=commit_sha,
+        repo_path=str(config.repo_path),
         lens_enabled=pack is not None,
         pack=PackRef(id=pack.id, version=pack.version, hash=pack.hash) if pack else None,
         lens_pack_versions=lens_pack_versions or [],

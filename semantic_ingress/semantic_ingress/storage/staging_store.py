@@ -40,6 +40,9 @@ PLANS = "plans"
 WORK_ITEMS = "work_items"
 STAGED_DOCS = "staged_docs"
 LENS_UPDATES = "staged_lens_updates"
+# Why the worker service cannot run a repository's sync from the UI (one document per repository;
+# no TTL: the service clears it once the sync runs, and deleting the index clears it too).
+WORKER_STATUS = "worker_status"
 
 
 def _expire_at() -> datetime:

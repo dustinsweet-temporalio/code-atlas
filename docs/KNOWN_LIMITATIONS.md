@@ -30,7 +30,10 @@ The repository summary (`repo_summary`, read by `get_repo_summary`) is generated
 
 ## 6. Indexing on Temporal
 
-- **The worker lives in the `sync` process.** The workflow only makes progress while `index.sh` (the indexer container) runs, because the activities need the bind-mounted repository. An interrupted run waits on the Temporal server until you run the same command again.
+- **An `index.sh` run's worker lives in the `sync` process.** The workflow only makes progress while `index.sh` (the indexer container) runs, because the activities need the bind-mounted repository. An interrupted run waits on the Temporal server until you run the same command again. Runs started from the UI are run by the `index-worker` service instead, and resume when it restarts.
+- **The UI indexes only under `REPOS_ROOT`, and can read all of it.** The app and the worker mount `REPOS_ROOT` (default: your home directory) read-only; the folder picker lists the folder names in it. Narrow `REPOS_ROOT` if that is more than you want the containers to see.
+- **The UI's percentage is an estimate.** Generation is weighted by item counts (a folder counts double), and the folder count is estimated until the folder phase starts, so the bar can step when the real count arrives. The Temporal report reports no progress of its own, so the bar holds at 85% while it runs.
+- **The UI offers incremental and full syncs only.** `--dry-run`, `--refresh-lens`, `--no-report` and `--window-size` are on the command line.
 - **One run per repository name.** Re-running while a run is in progress (or after it was interrupted) attaches to it with the options it was started with; new options apply to the next run.
 - **Resume picks up in-flight items after a short wait.** Summaries that were being generated when the worker died are retried once their heartbeat times out (30 seconds); finished ones are not repeated.
 - **Default throughput is lower than before.** At most `INDEX_WINDOW_SIZE` (default 5) summaries are generated at a time, against 8 parallel calls before. Folders are generated one depth level at a time, deepest first.

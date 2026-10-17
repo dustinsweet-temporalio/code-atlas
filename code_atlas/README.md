@@ -9,6 +9,7 @@ The `tools/` and `utils/` packages are imported as top-level modules, so run eve
 | Path | Purpose |
 | --- | --- |
 | `app.py` | FastAPI server: health, repositories, reports, the chat API (below), static UI |
+| `indexing.py` | Indexing from the UI: folder picker (`GET /api/fs`), the sync check (`POST /api/sync/check`), starting a sync (`POST /api/sync`), progress (`GET /api/syncs`), deleting an index (`DELETE /api/repos/{name}`) |
 | `agent.py` | Builds the model from `QUERY_*` settings and streams the answer; conversation history goes in the system prompt |
 | `chat/` | Chat sessions on Temporal: `ChatSessionWorkflow` (one per conversation), the `run_agent_turn` activity, Redis token streaming, and the worker (`python -m chat.worker`, the compose `chat-worker` service) |
 | `config.py` | Environment-driven settings and the agent system prompt |

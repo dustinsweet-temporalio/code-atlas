@@ -228,6 +228,9 @@ class IndexMeta(BaseModel):
     schema_version: int = SCHEMA_VERSION
     index_model: str
     commit_sha: str
+    # Where the repository was read from (the host path when indexed from the UI or index.sh),
+    # so the UI can offer it again for the next sync. None for indexes built before this.
+    repo_path: str | None = None
     indexed_at: datetime = Field(default_factory=datetime.utcnow)
     lens_enabled: bool = False
     pack: PackRef | None = None
