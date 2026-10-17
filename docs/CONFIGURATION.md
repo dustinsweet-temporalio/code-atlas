@@ -39,8 +39,15 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `TEMPORAL_UI_PORT` | `8233` | compose | Host port for the Temporal UI (bound to localhost) |
 | `COMPASS_PORT` | `8096` | compose | Host port for Compass Web (bound to localhost), opened by **Open in Compass** |
 | `LOG_LEVEL` | `INFO` | app | Query-side log level |
+| `CHAT_IDLE_HOURS` | `24` | app | A chat session workflow ends after this long without a message; the next message starts a new one from the browser's copy |
+| `CHAT_CONTEXT_CHARS` | `240000` | app, browser | Characters of conversation sent to the model and kept by the session (oldest messages dropped first; the browser keeps everything) |
+| `CHAT_TURN_TIMEOUT_MINUTES` | `20` | app | Longest one answer may take (the turn activity's start-to-close timeout) |
+| `CHAT_STREAM_TTL_SECONDS` | `3600` | chat-worker | How long a turn's streamed tokens stay in Redis (for a reloaded page) |
+| `CHAT_MAX_CONCURRENT_TURNS` | `8` | chat-worker | Turns the chat worker runs at once |
+| `CHAT_TASK_QUEUE` | `code-atlas-chat` | app, chat-worker | Temporal task queue for chat sessions |
+| `REDIS_URL` | `redis://redis:6379/0` | app, chat-worker | Redis for chat token streams (set by compose) |
 
-Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`.
+Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`, `REDIS_URL=redis://redis:6379/0`.
 
 ## Changing models
 
@@ -59,7 +66,8 @@ If a request fails with a 400, the error names the rejected parameter. Also upda
 | --- | --- |
 | Summaries | `mongo-data` volume (MongoDB), one database per repository |
 | Mirrored source | `source-data` volume, `<SOURCE_DIR>/<name>/<path>`; blob IDs in `<SOURCE_DIR>/.oids/<name>/<path>` |
-| Chat history | Browser local storage |
+| Chat history | Browser IndexedDB (database `code-atlas`); the session's recent context also passes through Temporal workflow history |
+| Chat token streams | Redis, in memory only, per turn for `CHAT_STREAM_TTL_SECONDS` |
 | Temporal Docs MCP sign-in | `~/.config/code-atlas/temporal-docs-mcp.json` on the host (0600), mounted at `/run/code-atlas` into the indexer and, for docs search in chat, into the app (read-write, so a rotated token can be saved) |
 | Knowledge pack | `knowledge/temporal-pack.yaml`, built into the image at `/app/knowledge` |
 | Temporal reports | `reports/<name>/temporal-report.md` and `.json` in this folder, mounted into the indexer at `/reports` |
