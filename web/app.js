@@ -20,7 +20,7 @@
     reportActions: $("report-actions"), reportSummary: $("report-summary"), reportDetailed: $("report-detailed"),
     reportDownload: $("report-download"), compassOpen: $("compass-open"), temporalLink: $("temporal-ui-link"),
     home: $("home"), homeView: $("home-view"), addIndex: $("add-index"), repoActions: $("repo-actions"),
-    syncIndex: $("sync-index"), deleteIndex: $("delete-index"),
+    syncIndex: $("sync-index"), deleteIndex: $("delete-index"), navHome: $("nav-home"), backHome: $("back-home"),
   };
 
   // ---- storage ----
@@ -249,7 +249,18 @@
     els.form.hidden = home || state.view === "report";
   }
 
-  const renderAll = () => { showChat(); renderSidebar(); renderHeader(); renderMessages(); renderComposer(); renderHome(); };
+  const renderAll = () => { showChat(); renderSidebar(); renderNav(); renderHeader(); renderMessages(); renderComposer(); renderHome(); };
+
+  // The ways back to the home view: marked current while on it, unavailable while an answer streams.
+  function renderNav() {
+    const home = isHome();
+    els.navHome.classList.toggle("active", home);
+    if (home) els.navHome.setAttribute("aria-current", "page"); else els.navHome.removeAttribute("aria-current");
+    for (const b of [els.navHome, els.backHome, els.home]) {
+      b.disabled = state.streaming;
+      b.title = state.streaming ? "Available when the answer has finished" : "All indexes";
+    }
+  }
 
   // ---- home view: the indexes, with their actions ----
   const ago = (iso) => {
@@ -526,7 +537,7 @@ ${clone.outerHTML}
   function setStreaming(on) {
     state.streaming = on;
     els.send.hidden = on; els.stop.hidden = !on;
-    renderComposer();
+    renderComposer(); renderNav();
     if (!on && !els.input.disabled) els.input.focus();
   }
 
@@ -842,7 +853,7 @@ ${clone.outerHTML}
     if (els.repoSelect.value) openChat(els.repoSelect.value); else goHome();
   });
   els.newChat.addEventListener("click", () => { if (state.selected) openChat(state.selected); });
-  els.home.addEventListener("click", goHome);
+  for (const b of [els.home, els.navHome, els.backHome]) b.addEventListener("click", goHome);
   els.addIndex.addEventListener("click", () => indexing.openAdd());
   els.syncIndex.addEventListener("click", () => { if (state.selected) indexing.openSync(state.selected); });
   els.deleteIndex.addEventListener("click", () => { if (state.selected) indexing.openDelete(state.selected); });

@@ -25,6 +25,14 @@ body {
 }
 .brand { font: inherit; font-weight: 700; font-size: 18px; letter-spacing: .2px; border: 0; background: none; padding: 0; color: var(--text); text-align: left; cursor: pointer; align-self: flex-start; }
 .brand:hover { color: var(--accent); }
+.brand:disabled { opacity: 1; cursor: default; color: var(--text); }
+.nav-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; margin-top: 6px; border: 0; border-radius: 6px; background: none; color: var(--text); font-size: 14px; text-align: left; }
+.nav-item:hover:not(:disabled) { background: var(--border); }
+.nav-item.active { background: var(--user); color: var(--accent); font-weight: 600; }
+.nav-icon { width: 14px; text-align: center; color: var(--muted); }
+.nav-item.active .nav-icon { color: var(--accent); }
+#chat-header .back { font-weight: 600; margin-right: 6px; }
+#chat-header .back:disabled { color: var(--muted); text-decoration: none; }
 h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 0 2px; }
 ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 li.item { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
