@@ -3,7 +3,9 @@ Code Atlas - question answering agent.
 AI-powered semantic navigation assistant that helps engineers explore and
 understand codebases through persistent semantic indexes stored in MongoDB.
 
-STATELESS PATTERN: Full conversation history passed in system prompt.
+STATELESS PATTERN: Full conversation history passed in system prompt. The chat
+session workflow (chat/) supplies that history; this module keeps no state per
+conversation.
 """
 from strands import Agent
 from strands.models.anthropic import AnthropicModel
@@ -53,6 +55,10 @@ logger.info(f"  - Navigation tools: {len(ALL_NAVIGATION_TOOLS)}")
 logger.info(f"  - Search tools: {len(ALL_SEARCH_TOOLS)}")
 logger.info(f"  - Source tools: {len(ALL_SOURCE_TOOLS)}")
 logger.info(f"  - System tools: {len(ALL_SYSTEM_TOOLS)}")
+
+class AgentInputError(Exception):
+    """The request cannot be answered as sent (for example, the repository is not available)."""
+
 
 # ============================================================================
 # STATE MANAGEMENT
@@ -311,9 +317,13 @@ def ensure_repository_indexes(repo_id: str, database_name: str) -> None:
 # MAIN ENTRYPOINT
 # ============================================================================
 
-async def stream_answer(payload):
+async def stream_answer(payload, raise_errors: bool = False):
     """
     Answer a chat request, yielding text chunks as they are produced.
+
+    By default errors are yielded as text (the answer explains them). With
+    raise_errors=True they are raised instead, so a caller with its own retry policy
+    (the chat activity) can tell a bad request (AgentInputError) from a model error.
     
     STATELESS PATTERN:
     1. Extract full conversation history and the selected repository from payload
@@ -353,6 +363,8 @@ async def stream_answer(payload):
         is_valid, database_name, error = validate_repository(repo_id)
         if not is_valid:
             logger.warning(f"[{request_id}] Repository '{repo_id}' rejected: {error}")
+            if raise_errors:
+                raise AgentInputError(f"repository '{repo_id}' is not available ({error})")
             yield f"Error: repository '{repo_id}' is not available ({error}). Select an index and start a new chat."
             return
         ensure_repository_indexes(repo_id, database_name)
@@ -433,7 +445,11 @@ async def stream_answer(payload):
         
         logger.info(f"[{request_id}] ◄◄◄ REQUEST COMPLETE ({chunk_count} chunks)")
         
+    except AgentInputError:
+        raise
     except Exception as e:
         logger.error(f"[{request_id}] ❌ ERROR: {e}", exc_info=True)
+        if raise_errors:
+            raise
         error_message = f"\n\n❌ **Error processing request:** {str(e)}\n\nPlease try rephrasing your question or contact support if the issue persists."
         yield error_message
