@@ -8,3 +8,7 @@ strands-agents[anthropic]>=1.61,<2
 
 # MongoDB driver
 pymongo>=4.10.1,<5
+
+# Chat sessions: Temporal workflows (same pin as the indexer) and Redis Streams for token streaming
+temporalio==1.34.0
+redis>=5.0,<7

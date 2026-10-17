@@ -23,7 +23,7 @@ def task_queue(repo_id: str) -> str:
 
 
 # Memo `origin` of a run: started by `sync` (index.sh, which runs its own worker) or by
-# the web UI (run by the `worker` service, which looks for running "ui" syncs).
+# the web UI (run by the `index-worker` service, which looks for running "ui" syncs).
 ORIGIN_CLI = "cli"
 ORIGIN_UI = "ui"
 

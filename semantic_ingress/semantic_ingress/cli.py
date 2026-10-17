@@ -436,7 +436,7 @@ def sync(
 )
 def worker(prefix: str) -> None:
     """
-    Run the indexing worker for syncs started from the web UI (the compose `worker`
+    Run the indexing worker for syncs started from the web UI (the compose `index-worker`
     service). It runs each such sync until it finishes, and resumes running ones
     after a restart. Syncs started with `sync` run in that command instead.
     """

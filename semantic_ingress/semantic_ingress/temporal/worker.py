@@ -2,7 +2,7 @@
 The worker `sync` embeds for the duration of a run.
 
 It runs where the repository is on disk (bind-mounted into the indexer container by
-index.sh, or under REPOS_ROOT in the `worker` service, which builds one per sync
+index.sh, or under REPOS_ROOT in the `index-worker` service, which builds one per sync
 started from the web UI; see service.py) and needs the source-data volume. It polls a
 per-repository task queue, so a worker started for another repository never picks up
 this one's activities.

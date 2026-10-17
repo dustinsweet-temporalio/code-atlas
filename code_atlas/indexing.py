@@ -10,7 +10,7 @@ Indexing from the web UI.
     DELETE /api/repos/{repo_id}    delete an index: its database (summaries, report) and mirrored source
 
 A sync started here is the workflow index.sh runs (sync-<name>), with memo origin "ui";
-the compose `worker` service runs it (semantic_ingress/temporal/service.py). Repositories
+the compose `index-worker` service runs it (semantic_ingress/temporal/service.py). Repositories
 are read where they are on the host: compose mounts REPOS_ROOT at the same path in the
 app and the worker, read-only.
 """
@@ -398,7 +398,7 @@ async def _progress(client, execution, memo: dict) -> dict:
         if memo.get("origin") == ORIGIN_UI:
             error = await asyncio.to_thread(_worker_error, memo.get("repo_id", ""))
             text = (f"The indexer worker cannot run this sync: {error}" if error else
-                    "Waiting for the indexer worker (if this lasts, check: docker compose up -d worker)")
+                    "Waiting for the indexer worker (if this lasts, check: docker compose up -d index-worker)")
         else:
             text = "Waiting for a worker: run the same ./scripts/index.sh command again to resume"
         return {"phase": None, "percent": 0, "description": text, "waiting": True}

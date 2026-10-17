@@ -24,7 +24,7 @@ semantic-ingress sync --repo-path /path/to/repo --repo-id my-repo
 | Command | Purpose |
 | --- | --- |
 | `sync` | Index or update a repository, as the Temporal workflow `sync-<repo-id>`. Detects full vs incremental by comparing the index with git |
-| `worker` | Run the syncs started from the web UI (the compose `worker` service): a worker per running sync, resumed after a restart |
+| `worker` | Run the syncs started from the web UI (the compose `index-worker` service): a worker per running sync, resumed after a restart |
 | `estimate` | Local token and cost estimate. Makes no API calls |
 | `repair-folders` | Legacy. Targets the old structured schema and does not work on indexes made by `sync` |
 | `dir-list-only` | Regenerate only the directory listing document |

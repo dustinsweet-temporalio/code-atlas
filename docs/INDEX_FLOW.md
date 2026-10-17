@@ -91,8 +91,21 @@ flowchart TD
     S --> A["Answer using summaries and source"]
 ```
 
-The browser posts the conversation to `/api/chat`. The agent (Strands with the Anthropic provider) selects tools to list repositories, retrieve summaries, search summary text, and fetch source. The server streams the answer back as server-sent events. For questions about durability, failure handling, orchestration or Temporal, the summary tools are called with `include_lens=True`, which appends the lens record (or roll-up, or repository lens); otherwise the lens is left out so ordinary questions cost no extra tokens. Text search covers summary and lens text.
+The browser keeps the conversation in IndexedDB and posts each message, with the newest part of the conversation, to `/api/chat`:
+
+```mermaid
+flowchart LR
+    B["Browser<br/>(IndexedDB: transcripts)"] -->|"POST /api/chat"| API["app"]
+    API -->|"Update-with-Start send_message"| W["ChatSessionWorkflow<br/>chat-&lt;index&gt;-&lt;conversation&gt;"]
+    W -->|"run_agent_turn"| A["chat-worker: agent + tools"]
+    A -->|"tokens (XADD)"| R[("Redis Stream")]
+    R -->|"relay (SSE)"| API
+    W -->|"final answer"| API
+    API -->|"SSE"| B
+```
+
+The session workflow keeps the recent context and runs one turn at a time; the turn activity streams tokens to Redis, and the app relays them and reconciles the stream with the Update's final answer. The agent (Strands with the Anthropic provider) selects tools to list repositories, retrieve summaries, search summary text, and fetch source. The server streams the answer back as server-sent events. For questions about durability, failure handling, orchestration or Temporal, the summary tools are called with `include_lens=True`, which appends the lens record (or roll-up, or repository lens); otherwise the lens is left out so ordinary questions cost no extra tokens. Text search covers summary and lens text.
 
 For a broad question, the agent starts at the root and follows relevant folders. For a named file, `get_dir_listing` provides a shortcut. `text_search_summaries` searches file and folder summaries within one repository. The LLM decides which context to retrieve and can answer from summaries alone when source is unnecessary.
 
-Source: `code_atlas/agent.py`, `config.py` (system prompt), `tools/`.
+Source: `code_atlas/agent.py`, `config.py` (system prompt), `tools/`, `chat/` (session workflow, turn activity, streaming), `app.py`.

@@ -63,11 +63,32 @@ SOURCE_DIR = _env("SOURCE_DIR", "/data/source")
 # INDEXING FROM THE UI
 # ============================================================================
 # Folder under which the UI can pick repositories to index. compose mounts it read-only at
-# the same path in the app and the `worker` service, so host paths work as they are.
+# the same path in the app and the `index-worker` service, so host paths work as they are.
 # Blank turns indexing from the UI off.
 REPOS_ROOT = _env("REPOS_ROOT", "")
 # The host user's home directory, so "~/code/x" typed in the UI means the host's ~.
 HOST_HOME = _env("HOST_HOME", "")
+
+# ============================================================================
+# CHAT SESSIONS (Temporal + Redis)
+# ============================================================================
+# Each conversation is a Temporal workflow; the chat-worker service runs its turns and
+# streams tokens through Redis Streams. The workflow gets these values in its input
+# (workflow code never reads the environment).
+TEMPORAL_ADDRESS = _env("TEMPORAL_ADDRESS", "localhost:7233")
+TEMPORAL_NAMESPACE = _env("TEMPORAL_NAMESPACE", "default")
+REDIS_URL = _env("REDIS_URL", "redis://redis:6379/0")
+CHAT_TASK_QUEUE = _env("CHAT_TASK_QUEUE", "code-atlas-chat")
+# A session workflow ends after this long without a message; the next message starts a
+# new run seeded from the conversation the browser keeps.
+CHAT_IDLE_HOURS = float(_env("CHAT_IDLE_HOURS", "24"))
+# Characters of conversation (oldest first dropped) sent to the model and kept in the workflow.
+CHAT_CONTEXT_CHARS = int(_env("CHAT_CONTEXT_CHARS", "240000"))
+CHAT_TURN_TIMEOUT_MINUTES = int(_env("CHAT_TURN_TIMEOUT_MINUTES", "20"))
+# How long a turn's streamed tokens stay in Redis (for a browser that reconnects).
+CHAT_STREAM_TTL_SECONDS = int(_env("CHAT_STREAM_TTL_SECONDS", "3600"))
+# Turns the chat worker runs at once.
+CHAT_MAX_CONCURRENT_TURNS = int(_env("CHAT_MAX_CONCURRENT_TURNS", "8"))
 
 # ============================================================================
 # AGENT SYSTEM PROMPT

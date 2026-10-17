@@ -1,6 +1,6 @@
 """
 The indexing worker for syncs started from the web UI: `semantic-ingress worker`,
-the compose `worker` service.
+the compose `index-worker` service.
 
 A sync's activities are bound to its repository (IndexActivities reads it from disk)
 and each repository has its own task queue, so this service does not poll one fixed
