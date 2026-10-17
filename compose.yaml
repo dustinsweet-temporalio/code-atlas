@@ -4,11 +4,14 @@
 #   docker compose up --build
 #   ./scripts/index.sh /path/to/a/git/repo [name]
 #
-# Open http://localhost:8090
+# Open http://localhost:8090 (Compass Web, for browsing the stored indexes: http://localhost:8096)
 
 x-app-env: &app-env
   MONGO_URL: mongodb://mongo:27017
   SOURCE_DIR: /data/source
+  # Compass Web, from inside the network (to look up its connection) and from the browser
+  COMPASS_URL: http://compass:8080
+  COMPASS_PUBLIC_URL: http://localhost:${COMPASS_PORT:-8096}
 
 services:
   mongo:
@@ -36,6 +39,22 @@ services:
       # Temporal Docs MCP sign-in (scripts/mcp_login.py), for docs search in chat.
       # Read-write: the client saves a rotated refresh token if the server issues one.
       - ${CODE_ATLAS_CONFIG_DIR:-${HOME}/.config/code-atlas}:/run/code-atlas
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  # Compass Web: MongoDB Compass in the browser, for looking at what an index stores
+  # (summaries, lenses, reports). Community build of Compass's web UI, not an official
+  # MongoDB image. The UI's "Open in Compass" button opens it at the chat's index.
+  compass:
+    image: haohanyang/compass-web:0.5.1
+    restart: unless-stopped
+    environment:
+      CW_MONGO_URI: mongodb://mongo:27017/?name=Code%20Atlas
+      CW_HOST: 0.0.0.0
+      CW_PORT: "8080"
+    ports:
+      - "127.0.0.1:${COMPASS_PORT:-8096}:8080"
     depends_on:
       mongo:
         condition: service_healthy
