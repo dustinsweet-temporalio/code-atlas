@@ -38,9 +38,16 @@ The repository summary (`repo_summary`, read by `get_repo_summary`) is generated
 - **Staging is kept for 7 days.** An abandoned run's staged summaries are removed by a TTL index after 7 days; terminating the workflow does not remove them sooner. The changes of an incremental run (paths and blob ids) are stored in one MongoDB document, which limits a single incremental run to roughly 100,000 changed files.
 - **Single-node dev server.** The `temporal` service is the Temporal dev server with a SQLite file on a volume: fine on a workstation, not a production deployment.
 
-## 7. Stateless conversations
+## 7. Conversations
 
-The agent is stateless: each request carries the whole conversation, and the server keeps no session. Very long conversations cost more input tokens on every turn.
+Each conversation is a Temporal session workflow that keeps the recent context (up to `CHAT_CONTEXT_CHARS`); the browser keeps the whole transcript.
+
+- **Transcripts live only in the browser.** They are in IndexedDB; clearing the site's data, or using another browser, loses them. The server keeps no copy beyond the session's recent context.
+- **Transcripts pass through Temporal history.** Messages and answers are workflow payloads, visible in the Temporal UI and in the dev server's SQLite volume while the session runs and for the namespace's retention period after it ends. There is no payload encryption.
+- **Last write wins across tabs.** Two tabs on the same conversation overwrite each other's saved copy.
+- **A stopped answer is `_(stopped)_` to the model.** The session records a stopped turn as `_(stopped)_` until the next message resyncs it with the partial answer the browser kept.
+- **Long conversations are trimmed.** Only the newest messages within `CHAT_CONTEXT_CHARS` reach the model; the agent does not see older ones.
+- **Context costs tokens on every turn.** The recent conversation goes into the system prompt each time, so long conversations cost more input tokens per turn.
 
 ## 8. Temporal lens
 

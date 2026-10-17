@@ -101,17 +101,21 @@ All settings are documented in [`.env.example`](.env.example) and [docs/CONFIGUR
                       │        └── Temporal dev server (the sync workflow; UI on :8233)
                       └──────► source volume (copy of the files, for source retrieval)
 
- browser ──► app (FastAPI + agent) ──► MongoDB, source volume
-                       │
-                       └──► Anthropic API
+ browser ──► app (FastAPI) ──► Temporal: one ChatSessionWorkflow per conversation
+ (IndexedDB:     ▲                 │
+  transcripts)   │                 ▼
+                 └── Redis ◄── chat-worker (agent) ──► MongoDB, source volume, Anthropic API
+                   (token stream)
 ```
+
+Each conversation is a Temporal workflow; each message is an Update on it. The `chat-worker` service runs the agent for every turn and streams its tokens through Redis, which the app relays to the browser. The browser keeps every conversation in IndexedDB (the record); the workflow keeps only the recent context. A turn survives a worker restart, and a page reloaded mid-answer picks the answer up again. Chat sessions appear in the Temporal UI as `chat-<index>-<conversation id>`.
 
 | Path | Purpose |
 | --- | --- |
 | [semantic_ingress/](semantic_ingress/README.md) | The indexer: git tree analysis, LLM summaries, MongoDB persistence, source mirroring; `sync` as a Temporal workflow |
 | [code_atlas/](code_atlas/README.md) | The query agent (tools, prompt) and the web server |
 | [web/](web/) | The browser UI (plain HTML/JS, no build step; libraries vendored in `web/vendor/`) |
-| [compose.yaml](compose.yaml), [Dockerfile](Dockerfile) | One image used for both the app and the indexer |
+| [compose.yaml](compose.yaml), [Dockerfile](Dockerfile) | One image for the app, the chat worker and the indexer; plus MongoDB, Temporal, Redis and Compass Web |
 | [docs/](docs/INDEX_FLOW.md) | Process diagrams and known limitations |
 
 Questions are answered by an agent that starts at the repository's root summary, follows relevant folders, and reads file summaries and source as needed. See [docs/INDEX_FLOW.md](docs/INDEX_FLOW.md).
@@ -123,7 +127,7 @@ Questions are answered by an agent that starts at the repository's root summary,
 - MongoDB is not published to your host. To look at what an index stores (summaries, lenses, reports), click **Open in Compass** above a chat, or open Compass Web at <http://localhost:8096> (change the port with `COMPASS_PORT` in `.env`). Compass Web is a community build of Compass's web UI (`haohanyang/compass-web`), not an official MongoDB image, and it can edit data as well as view it. For a shell: `docker compose exec mongo mongosh`.
 - Maintenance commands (run through `docker compose run --rm indexer <command> ...`): `sync`, `report`, `preflight`, `estimate`, `dir-list-only`, `source-mirror`. Add `--help` to any of them.
 - Temporal reports are written to `reports/<name>/` in this folder (ignored by git).
-- Chat history is stored in your browser only.
+- Chat history is stored in your browser only (IndexedDB). Clearing the site's data deletes it; conversations from earlier versions (in localStorage) are moved over on first load.
 
 ## Troubleshooting
 
@@ -131,6 +135,7 @@ Questions are answered by an agent that starts at the repository's root summary,
 - **A different page or a 404 at the URL**: another app is probably using the port. Set `APP_PORT` in `.env`, then `docker compose up -d`.
 - **`429` / rate limit errors while indexing**: lower `INDEX_WINDOW_SIZE` (or pass `--window-size`). Temporal already retries with backoff; the retries are visible in the Temporal UI.
 - **Preflight: `Temporal server not reachable`**: run `docker compose up -d temporal` (the indexer also starts it on demand) and check `TEMPORAL_ADDRESS`.
+- **Chat says Temporal or Redis is unavailable**: `docker compose up -d` (the app and the `chat-worker` need `temporal` and `redis`). `docker compose logs chat-worker` shows turn errors.
 - **A run was interrupted**: run the same `index.sh` command again; it resumes the workflow. To abandon it instead, terminate `sync-<name>` in the Temporal UI (staged summaries are removed after 7 days).
 - **Summaries look truncated or JSON errors during indexing**: raise `INDEX_MAX_TOKENS` or lower `INDEX_EFFORT`.
 - **"Not a valid Git repository"**: pass the repository root (the folder that contains `.git`).
