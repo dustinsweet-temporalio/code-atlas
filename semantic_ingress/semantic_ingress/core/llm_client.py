@@ -3,6 +3,7 @@ LLM client for semantic artifact generation.
 Wraps the Anthropic Messages API with retry logic, token counting, and error handling.
 """
 import json
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -143,6 +144,8 @@ class LLMClient:
         """
         self.config = config
         self.internal_retries = internal_retries
+        # Stop reason of this thread's latest single-prompt call (the client is shared across threads).
+        self._last = threading.local()
         self.log = logger.bind(component="llm_client", model=config.model_id)
         
         # ANTHROPIC_API_KEY is read from the environment by the SDK.
@@ -266,12 +269,22 @@ class LLMClient:
         schema: dict[str, Any] | None,
     ) -> tuple[BaseModel, LLMUsage]:
         """One attempt of generate(); failures are classified for the caller's retry policy."""
+        self._last.stop_reason = None
         try:
             response_text, usage = self._invoke_model(prompt, system=system, schema=schema)
-            if schema is not None:
-                validated_response = response_model.model_validate(json.loads(response_text))
-            else:
-                validated_response = self._validate_response(response_text, response_model)
+            try:
+                if schema is not None:
+                    validated_response = response_model.model_validate(json.loads(response_text))
+                else:
+                    validated_response = self._validate_response(response_text, response_model)
+            except Exception as e:
+                if getattr(self._last, "stop_reason", None) != "max_tokens":
+                    raise
+                # Say why the JSON is incomplete, rather than only where the parser gave up.
+                raise LLMTransientError(
+                    f"Response hit max_tokens ({self.config.max_tokens}) before the JSON was complete "
+                    f"({e}); raise INDEX_MAX_TOKENS or lower INDEX_EFFORT if this repeats"
+                ) from e
         except Exception as e:
             error = classify_llm_error(e)
             self.log.warning("llm_call_failed", error=str(e), retryable=isinstance(error, LLMTransientError))
@@ -366,6 +379,7 @@ class LLMClient:
             Tuple of (response text, usage stats)
         """
         message, usage = self._call([{"role": "user", "content": prompt}], system=system, schema=schema)
+        self._last.stop_reason = message.stop_reason
         text_content = next((b.text for b in message.content if b.type == "text"), None)
         if text_content is None:
             raise LLMError(f"No text content in response (stop_reason={message.stop_reason})")

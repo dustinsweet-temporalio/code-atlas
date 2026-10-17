@@ -87,29 +87,60 @@ def usage_totals(usage: LLMUsage) -> UsageTotals:
     )
 
 
+MESSAGE_CHARS = 1000
+
+
+def _root_cause(e: BaseException) -> BaseException:
+    """The innermost exception of a cause/context chain."""
+    seen, current = {id(e)}, e
+    while True:
+        nxt = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+        if nxt is None or id(nxt) in seen:
+            return current
+        seen.add(id(nxt))
+        current = nxt
+
+
+def _message(text: str, e: BaseException) -> str:
+    """`text`, plus the root cause when it says something the text does not, capped in length."""
+    root = _root_cause(e)
+    if root is not e and str(root) and str(root) not in text:
+        text = f"{text} (root cause: {type(root).__name__}: {root})"
+    return text[:MESSAGE_CHARS]
+
+
 def to_activity_error(e: Exception) -> BaseException:
     """The exception an activity should raise for `e`, classified for the retry policy."""
     if isinstance(e, (ApplicationError, CancelledError)):
         return e
     if isinstance(e, FileUnreadableError):
-        return ApplicationError(str(e), type=C.FILE_UNREADABLE, non_retryable=True)
+        return ApplicationError(_message(str(e), e), type=C.FILE_UNREADABLE, non_retryable=True)
     if isinstance(e, (anthropic.APIError, LLMError, ValidationError, json.JSONDecodeError)):
         error = classify_llm_error(e)
         if isinstance(error, LLMPermanentError):
-            return ApplicationError(str(error), type=C.LLM_PERMANENT, non_retryable=True)
+            return ApplicationError(_message(str(error), e), type=C.LLM_PERMANENT, non_retryable=True)
         delay = timedelta(seconds=error.retry_after) if error.retry_after else None
-        return ApplicationError(str(error), type=C.LLM_TRANSIENT, next_retry_delay=delay)
-    return e
+        return ApplicationError(_message(str(error), e), type=C.LLM_TRANSIENT, next_retry_delay=delay)
+    # Anything else (e.g. a MongoDB error) is retried by the activity's policy, as before.
+    return ApplicationError(_message(str(e), e), type=type(e).__name__)
 
 
 @contextmanager
 def translated_errors() -> Iterator[None]:
+    """
+    Raise exceptions as classified ApplicationErrors. The failure keeps one cause (the
+    original exception, with its stack trace in our code); the chain beneath it (for
+    a connection error: the SDK's and the HTTP library's exceptions) is summarised in
+    the message instead, so the failure stays under the server's size limit.
+    """
     try:
         yield
     except Exception as e:
         error = to_activity_error(e)
         if error is e:
             raise
+        e.__cause__ = None
+        e.__suppress_context__ = True
         raise error from e
 
 

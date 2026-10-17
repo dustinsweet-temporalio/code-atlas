@@ -82,3 +82,24 @@ def test_default_mode_still_retries_internally(client_factory):
     with pytest.raises(LLMError):
         client.generate("p", FileSemanticSummary)
     assert len(calls) == 3
+
+
+def test_activity_mode_says_when_a_response_hit_max_tokens(monkeypatch, client_factory):
+    from types import SimpleNamespace
+
+    client, _ = client_factory([OK], internal_retries=False)
+    truncated = SimpleNamespace(stop_reason="max_tokens",
+                                content=[SimpleNamespace(type="text", text='{"role": "A fi')])
+    monkeypatch.setattr(client, "_invoke_model", LLMClient._invoke_model.__get__(client))
+    monkeypatch.setattr(client, "_call", lambda *a, **k: (truncated, LLMUsage(input_tokens=1, output_tokens=1)))
+    with pytest.raises(LLMTransientError) as e:
+        client.generate("p", FileSemanticSummary, enforce_schema=True)
+    assert f"hit max_tokens ({client.config.max_tokens})" in str(e.value)
+    assert "Unterminated string" in str(e.value)
+
+    # A complete response that fails validation for another reason is reported as before.
+    complete = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text='{"role": "A fi')])
+    monkeypatch.setattr(client, "_call", lambda *a, **k: (complete, LLMUsage(input_tokens=1, output_tokens=1)))
+    with pytest.raises(LLMTransientError) as e:
+        client.generate("p", FileSemanticSummary, enforce_schema=True)
+    assert "max_tokens" not in str(e.value)
