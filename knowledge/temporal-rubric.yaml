@@ -1,0 +1,140 @@
+# Temporal report rubric
+#
+# How the Temporal report scores a process (suitability) and existing Temporal
+# code (evaluation). Kept apart from the knowledge pack so that scoring changes
+# do not change the lens pack version. Every signal code, gate id and check
+# pattern used here must exist in the pack; the loader checks that.
+#
+# Suitability is scored per process, from its process card:
+#   fit       = the best value path (a process needs one strong reason for Temporal)
+#   modifiers = what makes adoption easier or harder, and the gates
+#   overall   = weighted fit and modifiers, capped by the gates
+#
+# Anchors are the levels a score is chosen from; a value between two anchors is
+# used only when the evidence sits between them.
+
+meta:
+  id: temporal-report-rubric
+  version: 2.0.0
+  built: 2026-10-16
+  pack: temporal-lens-pack
+
+value_paths:
+  - id: PATH-PIPELINE
+    t: "Durable pipeline"
+    q: "How costly is it to lose or redo the work in flight when a run fails?"
+    signals: [effect.llm, effect.http, fanout.parallel, fanout.batch, wait.long, state.cross_step, orch.agent_loop, flaky.api, rate.limit]
+    consider: "Count the units of work per run and what each costs (paid calls, compute, time), and what a crash at each stage loses according to the card. Long or expensive runs with no resume score high even with no waiting."
+    anchors:
+      0: "One short step; nothing to lose"
+      3: "A few cheap steps; a rerun costs seconds"
+      5: "Many steps or units; a crash repeats minutes of work or a modest number of paid calls"
+      8: "Long runs (tens of minutes to hours) or many paid calls (LLM, metered APIs) lost or repeated on a crash"
+      10: "Very long or very expensive runs (hours to days, thousands of paid calls) with no way to resume"
+
+  - id: PATH-TRANSACTION
+    t: "Distributed transaction"
+    q: "Does the process change state in several systems that must stay consistent?"
+    signals: [effect.payment, effect.db_write, effect.infra, effect.publish, effect.notify, reliab.compensation, reliab.idempotency, choreo.msg_bus]
+    consider: "Partial failure between writes, and whether anything undoes or completes earlier steps."
+    anchors:
+      0: "No writes, or one atomic write"
+      3: "Writes to one store in a few steps"
+      5: "Writes across two systems; partial failure needs manual cleanup"
+      8: "Money, infrastructure or customer-visible state changed across several systems"
+      10: "Partial failure corrupts or loses state with no recovery path"
+
+  - id: PATH-WAIT
+    t: "Long-lived waits"
+    q: "Does the work wait on time, people or external events?"
+    signals: [wait.sleep, wait.poll, wait.human, wait.external, wait.long, state.diy_status, state.temp_correlation]
+    consider: "How long the waits are, and how the process keeps track of where it is while waiting."
+    anchors:
+      0: "No waiting"
+      3: "Short sleeps or simple polling"
+      5: "Polling or delayed jobs tracked in status fields"
+      8: "Waits on people or external events, with deadlines"
+      10: "Long-lived entities waiting days to months"
+
+  - id: PATH-SCHEDULE
+    t: "Scheduled work"
+    q: "Is the work started on a schedule where overlap, missed runs or catch-up matter?"
+    signals: [trigger.cron, wait.poll, reliab.lock]
+    consider: "Whether runs can overlap, what happens to a missed run, and whether past periods must be backfilled."
+    anchors:
+      0: "Not scheduled"
+      3: "Simple cron; overlap and missed runs are harmless"
+      5: "Periodic jobs where overlap or missed runs matter"
+      8: "Several schedules needing overlap control, catch-up or backfill"
+      10: "A homegrown scheduler"
+
+modifiers:
+  - id: B-BURDEN
+    t: "Reliability burden today"
+    q: "How much hand-built reliability code would Temporal remove?"
+    signals: [reliab.retry, reliab.checkpoint, reliab.compensation, reliab.dlq, reliab.lock, reliab.timeout, state.diy_status, state.temp_correlation, choreo.msg_bus]
+    consider: "Only mechanisms the card shows in code; a cache written after the work is not a checkpoint."
+    anchors:
+      0: "None"
+      3: "Isolated retry helpers"
+      5: "Retries plus status tracking or failure collection"
+      8: "Checkpointing, compensation, DIY state machines"
+      10: "A homegrown orchestration framework"
+
+  - id: B-SEPARABILITY
+    t: "Side-effect separability"
+    q: "How cleanly do the side effects separate into activities?"
+    signals: ["hazard.*"]
+    consider: "Whether side effects sit behind clear functions or adapters, and how much shared mutable state the steps use."
+    anchors:
+      0: "Side effects interleaved everywhere with shared mutable state"
+      5: "Mixed but refactorable"
+      10: "Clean service or adapter boundaries"
+
+  - id: B-EFFORT
+    t: "Migration ease"
+    q: "How easy is the change? (10 = easiest)"
+    signals: [orch.adjacent]
+    gates: [G-SDK-LANG]
+    consider: "Language SDK availability, coupling, and how much of the process must change."
+    anchors:
+      0: "No SDK for the language; deep coupling"
+      5: "Supported language; moderate refactor"
+      10: "Supported language, clean boundaries, small surface"
+
+  - id: B-GATES
+    t: "Fit clearance"
+    q: "How clear of disqualifiers is the process? (10 = no gates hit)"
+    gates: [G-LATENCY, G-READONLY, G-DATAPLANE, G-NO-ORCHESTRATION, G-SDK-LANG]
+    consider: "Only gates verified against the source for this process's files count."
+    anchors:
+      0: "A disqualifier dominates"
+      5: "A disqualifier applies to part of the process"
+      10: "No gates"
+
+overall:
+  weights: {fit: 0.6, B-BURDEN: 0.2, B-SEPARABILITY: 0.1, B-EFFORT: 0.1}
+  cap: {bar: B-GATES, plus: 2}
+  suitable_at: 5
+  # Scores within `margin` of suitable_at are "borderline": calibration (Phase 8f)
+  # measured run-to-run differences of up to 0.7 in a process's overall score,
+  # so a verdict that close to the threshold is not reliable either way.
+  # suitable >= 5.75; borderline between; not suitable <= 4.25.
+  margin: 0.75
+
+evaluate:
+  # Checks count against the first bar that lists their exact id, otherwise the
+  # first bar with a matching wildcard. Every usable check maps to a bar.
+  bars:
+    - {id: B-E-DETERMINISM, t: "Determinism safety", checks: ["E-DET-*", "S-*"]}
+    - {id: B-E-FAILURE, t: "Failure handling", checks: ["E-RP-*", "E-ERR-*", "E-AO-*", E-AC-ERRCLASS, E-AC-CLEANUP, E-AC-LLM-RETRY, "E-WFO-*", "E-CXL-*", "E-SAGA-*", "E-SE-*", "E-SESS-*"]}
+    - {id: B-E-IDEMPOTENCY, t: "Idempotency", checks: [E-AC-IDEMP, E-SIG-IDEMP, E-LA-CONSECUTIVE, E-SAGA-POLICY, E-AC-MULTISTEP]}
+    - {id: B-E-HISTORY, t: "History and scale hygiene", checks: ["E-CAN-*", "E-FAN-*", E-POLL-WF, E-IO-PAYLOAD, E-ENT-NOCAN, "E-ENT-*", "E-POLL-*"]}
+    - {id: B-E-IDIOM, t: "Primitive idiom", checks: ["E-CHILD-*", "E-LA-*", "E-Q-*", "E-SIG-*", "E-UPD-*", "E-TMR-*", "E-SA-*", "E-INT-*"]}
+    - {id: B-E-CHANGE, t: "Versioning and testing", checks: ["E-VER-*", "E-TEST-*", "E-IO-*"]}
+    - {id: B-E-OPS, t: "Operational readiness", checks: ["E-WK-*", "E-DC-*", "E-VIS-*", "E-SCH-*", E-ACTIONS, E-AC-LOGGER, E-AC-DI]}
+  coverage: {id: B-E-COVERAGE, t: "Temporal coverage"}
+  deductions: {high: 3, medium: 1.5, low: 0.5}
+
+metrics:
+  pct_temporalized: "Share of relevance >= 2 files (and their lines) whose primary kind is ORCH or ACT and that a design moves into workflows or activities, counting Temporal code already present."

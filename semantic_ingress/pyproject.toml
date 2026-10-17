@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semantic-ingress"
+version = "0.1.0"
+description = "Semantic code indexer: LLM summaries of files and folders, stored in MongoDB"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Software Architecture"},
+]
+
+dependencies = [
+    "pydantic>=2.5.0",
+    "pygit2>=1.13.0",
+    "click>=8.1.0",
+    "structlog>=23.2.0",
+    "jsonschema>=4.20.0",
+    "anthropic>=0.70.0",
+    "pymongo>=4.10.1,<5",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "black>=23.12.0",
+    "ruff>=0.1.9",
+    "mypy>=1.8.0",
+]
+
+[project.scripts]
+semantic-ingress = "semantic_ingress.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["semantic_ingress", "semantic_ingress.*"]
+namespaces = false
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

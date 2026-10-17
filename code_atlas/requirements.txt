@@ -1,0 +1,10 @@
+# Web server
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.5
+
+# Agent framework with the Anthropic provider
+strands-agents[anthropic]>=1.61,<2
+
+# MongoDB driver
+pymongo>=4.10.1,<5

@@ -1,0 +1,65 @@
+# Code Atlas: fully local. Only the LLM calls leave your machine (Anthropic API).
+#
+#   cp .env.example .env      # then set ANTHROPIC_API_KEY
+#   docker compose up --build
+#   ./scripts/index.sh /path/to/a/git/repo [name]
+#
+# Open http://localhost:8090
+
+x-app-env: &app-env
+  MONGO_URL: mongodb://mongo:27017
+  SOURCE_DIR: /data/source
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    image: code-atlas:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *app-env
+    ports:
+      - "127.0.0.1:${APP_PORT:-8090}:8080"
+    volumes:
+      - source-data:/data/source:ro
+      # Temporal Docs MCP sign-in (scripts/mcp_login.py), for docs search in chat.
+      # Read-write: the client saves a rotated refresh token if the server issues one.
+      - ${CODE_ATLAS_CONFIG_DIR:-${HOME}/.config/code-atlas}:/run/code-atlas
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  # Run on demand: docker compose run --rm indexer sync --repo-path /repos/<name> --repo-id <name>
+  # (scripts/index.sh wraps this and mounts the folder for you)
+  indexer:
+    build: .
+    image: code-atlas:local
+    profiles: ["tools"]
+    env_file: .env
+    environment:
+      <<: *app-env
+    entrypoint: ["semantic-ingress"]
+    volumes:
+      - source-data:/data/source
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-data:
+  source-data:
+
+networks:
+  default:
+    name: code_atlas
