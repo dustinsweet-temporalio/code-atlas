@@ -26,13 +26,23 @@ The repository summary (`repo_summary`, read by `get_repo_summary`) is generated
 
 ## 5. Writes are not one transaction
 
-A failed run can leave the index partially updated. Re-running `sync` resumes from the current state.
+`sync` stages everything it generates and writes to the index in one phase at the end (deletions of removed files, then batched upserts, then index metadata and text indexes). That phase is not a transaction: a run that fails inside it can leave the index partly updated. Re-running `sync` resumes the workflow, and the writes are idempotent.
 
-## 6. Stateless conversations
+## 6. Indexing on Temporal
+
+- **The worker lives in the `sync` process.** The workflow only makes progress while `index.sh` (the indexer container) runs, because the activities need the bind-mounted repository. An interrupted run waits on the Temporal server until you run the same command again.
+- **One run per repository name.** Re-running while a run is in progress (or after it was interrupted) attaches to it with the options it was started with; new options apply to the next run.
+- **Resume picks up in-flight items after a short wait.** Summaries that were being generated when the worker died are retried once their heartbeat times out (30 seconds); finished ones are not repeated.
+- **Default throughput is lower than before.** At most `INDEX_WINDOW_SIZE` (default 5) summaries are generated at a time, against 8 parallel calls before. Folders are generated one depth level at a time, deepest first.
+- **Dry runs no longer preview the source mirror.** `--dry-run` generates summaries (and spends tokens), writes nothing and mirrors nothing.
+- **Staging is kept for 7 days.** An abandoned run's staged summaries are removed by a TTL index after 7 days; terminating the workflow does not remove them sooner. The changes of an incremental run (paths and blob ids) are stored in one MongoDB document, which limits a single incremental run to roughly 100,000 changed files.
+- **Single-node dev server.** The `temporal` service is the Temporal dev server with a SQLite file on a volume: fine on a workstation, not a production deployment.
+
+## 7. Stateless conversations
 
 The agent is stateless: each request carries the whole conversation, and the server keeps no session. Very long conversations cost more input tokens on every turn.
 
-## 7. Temporal lens
+## 8. Temporal lens
 
 - **Review findings are leads.** For code that already uses a Temporal SDK, each file's lens lists review checks it may violate (`f`). In calibration about half were accurate; they point at where to look and must be confirmed against the source before they are reported.
 - **The Docs MCP sign-in is personal.** The stored refresh token belongs to whoever ran `scripts/mcp_login.py`. That is fine on a workstation; a shared deployment needs a service credential.
@@ -40,7 +50,7 @@ The agent is stateless: each request carries the whole conversation, and the ser
 - **Tier 0 detection is pattern-based.** Temporal SDK use is detected from imports per language, and other orchestrators from dependency manifests and import lines, using the markers in the pack. Unusual layouts (vendored SDKs, dynamic imports) can be missed.
 - **Repository pass reads a budget.** It sees relevance-3 file records first, then relevance-2, then relevance-1, up to about 60k tokens; in very large repositories lower-relevance records are left out (the run says how many).
 
-## 8. Temporal report
+## 9. Temporal report
 
 - **Leads are checked one file at a time.** A check that depends on another file (for example, whether activities registered in the worker are synchronous) comes back "unclear" and is listed in the appendix, not in the findings.
 - **At most 60 leads per report.** Gates come first, then findings by relevance; the appendix says how many were not checked.

@@ -430,25 +430,25 @@ def _checks(pack, rubric):
 
 
 def test_report_is_stored_and_a_failure_keeps_the_last_good_one(pack, rubric, tmp_path, monkeypatch):
-    from semantic_ingress import cli
     from semantic_ingress.config import IngestionConfig
+    from semantic_ingress.report import service
     from semantic_ingress.report.run import ReportResult
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     config = IngestionConfig(repo_path=tmp_path, output_dir=tmp_path, prefix="semv2", repo_id="demo")
     store = ReportStore()
     data = {"commit": "abc", "cost_usd": 0.5}
-    monkeypatch.setattr(cli, "build_report", lambda *a, **k: ReportResult(data, "# md", ZERO))
-    cli._build_and_store_report(config, _checks(pack, rubric), store, "demo")
+    monkeypatch.setattr(service, "build_report", lambda *a, **k: ReportResult(data, "# md", ZERO))
+    service.build_and_store_report(config, _checks(pack, rubric), store, "demo")
     assert store.doc["status"] == "ok" and store.doc["data"] == data and store.doc["commit_sha"] == "abc"
     assert store.doc["rubric_version"] == rubric.version and store.doc["markdown"] == "# md"
 
     def fail(*a, **k):
         raise RuntimeError("docs search down")
 
-    monkeypatch.setattr(cli, "build_report", fail)
+    monkeypatch.setattr(service, "build_report", fail)
     with pytest.raises(RuntimeError):
-        cli._build_and_store_report(config, _checks(pack, rubric), store, "demo")
+        service.build_and_store_report(config, _checks(pack, rubric), store, "demo")
     assert store.doc["status"] == "failed" and store.doc["error"] == "docs search down"
     assert store.doc["data"] == data  # the last good report is kept
 

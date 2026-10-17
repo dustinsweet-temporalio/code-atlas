@@ -2,11 +2,13 @@
 Preflight: check everything an index run depends on before any LLM spend.
 
 Order: knowledge pack and report rubric (lens on) -> Anthropic API -> MongoDB ->
-Temporal Docs MCP (lens on: token refresh, then a canary search). The first failure stops the run
+Temporal server -> Temporal Docs MCP (lens on: token refresh, then a canary search). The first failure stops the run
 with the fix to apply. The docs client that passed is returned for reuse.
 """
+import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 import anthropic
 
@@ -34,7 +36,8 @@ class PreflightResult:
     docs: TemporalDocsClient | None = None
 
 
-def run_preflight(config: IngestionConfig) -> PreflightResult:
+def run_preflight(config: IngestionConfig, check_temporal: bool = True) -> PreflightResult:
+    """Run the checks in order; `check_temporal` is off for commands that do not use Temporal (`report`)."""
     result = PreflightResult()
     lens = config.lens.enabled
 
@@ -72,7 +75,18 @@ def run_preflight(config: IngestionConfig) -> PreflightResult:
         raise PreflightError(f"MongoDB not reachable at MONGO_URL: {e}") from e
     result.checks.append(("mongodb", config.mongo.url))
 
-    # 4. Temporal Docs MCP
+    # 4. Temporal server (sync runs as a workflow on it)
+    if check_temporal:
+        try:
+            version = asyncio.run(_temporal_server_version(config))
+        except Exception as e:
+            raise PreflightError(
+                f"Temporal server not reachable at TEMPORAL_ADDRESS ({config.temporal.address}): {e}. "
+                "Run `docker compose up -d temporal` and check TEMPORAL_ADDRESS."
+            ) from e
+        result.checks.append(("temporal server", f"{config.temporal.address} ({version})"))
+
+    # 5. Temporal Docs MCP
     if lens:
         start = time.time()
         try:
@@ -96,3 +110,15 @@ def run_preflight(config: IngestionConfig) -> PreflightResult:
         result.checks.append(("temporal docs mcp", "skipped (LENS_ENABLED=false)"))
 
     return result
+
+
+async def _temporal_server_version(config: IngestionConfig) -> str:
+    """Connect to the Temporal server and make one cheap call; returns the server version."""
+    from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
+    from temporalio.client import Client
+
+    client = await asyncio.wait_for(
+        Client.connect(config.temporal.address, namespace=config.temporal.namespace), timeout=10
+    )
+    info = await client.workflow_service.get_system_info(GetSystemInfoRequest(), timeout=timedelta(seconds=10))
+    return f"server {info.server_version}" if info.server_version else "connected"

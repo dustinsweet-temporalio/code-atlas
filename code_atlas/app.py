@@ -4,6 +4,7 @@ Code Atlas web server.
 Serves the chat UI and a small API:
 
     GET  /api/health   service status (database, API key, model)
+    GET  /api/config   UI settings (the Temporal UI link)
     GET  /api/repos    indexed repositories
     GET  /api/report/{repo_id}  the stored Temporal report (data for the report view)
     GET  /api/report/{repo_id}/markdown  the detailed report as Markdown (as ./scripts/report.sh writes it)
@@ -88,6 +89,15 @@ def health(recheck: bool = False):
     status["temporal_docs"] = docs_status(recheck=recheck)
     ok = status["database"] == "ok" and status["api_key_configured"]
     return JSONResponse(status, status_code=200 if ok else 503)
+
+
+@app.get("/api/config")
+def ui_config():
+    """Settings the UI needs: where the Temporal UI (indexing runs) is, as the browser reaches it."""
+    return {
+        "temporal_ui_url": os.environ.get("TEMPORAL_UI_URL", "").strip() or "http://localhost:8233",
+        "temporal_namespace": os.environ.get("TEMPORAL_NAMESPACE", "").strip() or "default",
+    }
 
 
 @app.get("/api/repos")

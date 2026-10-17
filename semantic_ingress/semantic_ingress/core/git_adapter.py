@@ -23,6 +23,10 @@ except Exception:  # older pygit2/libgit2 without the option
     pass
 
 
+class FileUnreadableError(ValueError):
+    """A file's blob is missing or is not UTF-8 text; retrying will not help."""
+
+
 class FileEntry(NamedTuple):
     """A file entry from the Git tree."""
     name: str  # Full path
@@ -112,12 +116,12 @@ class GitAdapter:
         """
         blob = self.repo.get(blob_oid)
         if blob is None:
-            raise ValueError(f"Blob not found: {blob_oid}")
+            raise FileUnreadableError(f"Blob not found: {blob_oid}")
 
         try:
             return blob.data.decode("utf-8")
         except UnicodeDecodeError as e:
-            raise ValueError(f"Cannot decode blob as UTF-8: {blob_oid}") from e
+            raise FileUnreadableError(f"Cannot decode blob as UTF-8: {blob_oid}") from e
 
     def _walk_tree(self, tree: pygit2.Tree, prefix: str = "") -> list[FileEntry]:
         """
