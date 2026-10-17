@@ -42,5 +42,9 @@ TURN_RETRY = RetryPolicy(
     non_retryable_error_types=[INVALID_INPUT, CONTEXT_OVERFLOW, LLM_PERMANENT],
 )
 HEARTBEAT_TIMEOUT = timedelta(seconds=30)
-HEARTBEAT_INTERVAL_SECONDS = 5.0
+# Cancellation (Stop) reaches an activity only in a heartbeat response, and the SDK
+# sends heartbeats at most every 0.8 x the heartbeat timeout unless the worker caps
+# it. The chat worker caps it at HEARTBEAT_THROTTLE, so Stop takes a second or two.
+HEARTBEAT_INTERVAL_SECONDS = 1.0
+HEARTBEAT_THROTTLE = timedelta(seconds=2)
 DEFAULT_TURN_TIMEOUT_SECONDS = 20 * 60
