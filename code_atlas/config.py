@@ -60,6 +60,27 @@ COMPASS_PUBLIC_URL = _env("COMPASS_PUBLIC_URL", "")
 SOURCE_DIR = _env("SOURCE_DIR", "/data/source")
 
 # ============================================================================
+# CHAT SESSIONS (Temporal + Redis)
+# ============================================================================
+# Each conversation is a Temporal workflow; the chat-worker service runs its turns and
+# streams tokens through Redis Streams. The workflow gets these values in its input
+# (workflow code never reads the environment).
+TEMPORAL_ADDRESS = _env("TEMPORAL_ADDRESS", "localhost:7233")
+TEMPORAL_NAMESPACE = _env("TEMPORAL_NAMESPACE", "default")
+REDIS_URL = _env("REDIS_URL", "redis://redis:6379/0")
+CHAT_TASK_QUEUE = _env("CHAT_TASK_QUEUE", "code-atlas-chat")
+# A session workflow ends after this long without a message; the next message starts a
+# new run seeded from the conversation the browser keeps.
+CHAT_IDLE_HOURS = float(_env("CHAT_IDLE_HOURS", "24"))
+# Characters of conversation (oldest first dropped) sent to the model and kept in the workflow.
+CHAT_CONTEXT_CHARS = int(_env("CHAT_CONTEXT_CHARS", "240000"))
+CHAT_TURN_TIMEOUT_MINUTES = int(_env("CHAT_TURN_TIMEOUT_MINUTES", "20"))
+# How long a turn's streamed tokens stay in Redis (for a browser that reconnects).
+CHAT_STREAM_TTL_SECONDS = int(_env("CHAT_STREAM_TTL_SECONDS", "3600"))
+# Turns the chat worker runs at once.
+CHAT_MAX_CONCURRENT_TURNS = int(_env("CHAT_MAX_CONCURRENT_TURNS", "8"))
+
+# ============================================================================
 # AGENT SYSTEM PROMPT
 # ============================================================================
 AGENT_SYSTEM_PROMPT = """You are a specialized semantic code navigation assistant that helps software engineers understand and explore codebases through a persistent semantic index.

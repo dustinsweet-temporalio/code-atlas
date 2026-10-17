@@ -19,6 +19,8 @@ x-app-env: &app-env
   # Compass Web, from inside the network (to look up its connection) and from the browser
   COMPASS_URL: http://compass:8080
   COMPASS_PUBLIC_URL: http://localhost:${COMPASS_PORT:-8096}
+  # Chat token streaming (Redis Streams; not published to the host)
+  REDIS_URL: redis://redis:6379/0
 
 services:
   mongo:
@@ -67,6 +69,44 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Runs chat turns: each conversation is a Temporal workflow (ChatSessionWorkflow), and
+  # this worker runs the agent for every message. Same mounts as `app`, because the
+  # agent's tools (source reads, Temporal Docs MCP search) run here.
+  chat-worker:
+    build: .
+    image: code-atlas:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *app-env
+    command: ["python", "-m", "chat.worker"]
+    stop_grace_period: 45s
+    volumes:
+      - source-data:/data/source:ro
+      - ${CODE_ATLAS_CONFIG_DIR:-${HOME}/.config/code-atlas}:/run/code-atlas
+    depends_on:
+      mongo:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Token streams of chat turns in flight (ephemeral: no persistence, no host port).
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   # Compass Web: MongoDB Compass in the browser, for looking at what an index stores
   # (summaries, lenses, reports). Community build of Compass's web UI, not an official
