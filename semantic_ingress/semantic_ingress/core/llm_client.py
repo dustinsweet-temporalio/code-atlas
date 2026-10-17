@@ -3,6 +3,7 @@ LLM client for semantic artifact generation.
 Wraps the Anthropic Messages API with retry logic, token counting, and error handling.
 """
 import json
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -20,6 +21,53 @@ logger = structlog.get_logger()
 class LLMError(Exception):
     """Base exception for LLM client errors."""
     pass
+
+
+class LLMTransientError(LLMError):
+    """A failure that may succeed when retried (rate limit, overload, timeout, bad JSON)."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class LLMPermanentError(LLMError):
+    """A failure that will not succeed when retried (other 4xx, refusal)."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(e: Exception) -> float | None:
+    """The server's retry-after hint in seconds, if the error carries one."""
+    response = getattr(e, "response", None)
+    value = response.headers.get("retry-after") if response is not None else None
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
+
+
+def classify_llm_error(e: Exception) -> LLMError:
+    """
+    Map an exception from a model call to LLMTransientError or LLMPermanentError.
+
+    Transient: 408, 409, 429, 5xx, connection and timeout errors, invalid JSON or a
+    response that fails validation. Permanent: other 4xx and refusals. Anything
+    else (an unexpected error) counts as transient.
+    """
+    if isinstance(e, (LLMTransientError, LLMPermanentError)):
+        return e
+    if isinstance(e, anthropic.APIStatusError):
+        if 400 <= e.status_code < 500 and e.status_code not in (408, 409, 429):
+            return LLMPermanentError(f"Anthropic API error ({e.status_code}): {e}")
+        return LLMTransientError(f"Anthropic API error ({e.status_code}): {e}", _retry_after(e))
+    if isinstance(e, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
+        return LLMTransientError(f"Anthropic API not reachable: {e}")
+    if isinstance(e, (ValidationError, json.JSONDecodeError)):
+        return LLMTransientError(f"Invalid model response: {e}")
+    return LLMTransientError(str(e))
 
 
 # USD per million tokens, used only for cost reporting. Set from config by LLMClient.
@@ -83,20 +131,27 @@ def _move_cache_breakpoint(messages: list[dict[str, Any]]) -> None:
 class LLMClient:
     """Client for interacting with the Anthropic API."""
     
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, internal_retries: bool = True) -> None:
         """
         Initialize LLM client.
         
         Args:
             config: LLM configuration
+            internal_retries: Retry inside the client (SDK retries and the retry loop in
+                generate). False for Temporal activities, where the activity retry
+                policy owns retries: one attempt per call, failures raised as
+                LLMTransientError or LLMPermanentError.
         """
         self.config = config
+        self.internal_retries = internal_retries
+        # Stop reason of this thread's latest single-prompt call (the client is shared across threads).
+        self._last = threading.local()
         self.log = logger.bind(component="llm_client", model=config.model_id)
         
         # ANTHROPIC_API_KEY is read from the environment by the SDK.
         self.client = anthropic.Anthropic(
             timeout=config.timeout_seconds,
-            max_retries=config.max_retries,
+            max_retries=config.max_retries if internal_retries else 0,
         )
         _pricing["input"] = config.input_price_per_1m
         _pricing["output"] = config.output_price_per_1m
@@ -139,6 +194,9 @@ class LLMClient:
             enforce_schema=enforce_schema,
         )
         schema = to_llm_schema(response_model) if enforce_schema else None
+
+        if not self.internal_retries:
+            return self._generate_once(prompt, response_model, system, schema)
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -202,6 +260,46 @@ class LLMClient:
                 time.sleep(2 ** attempt)
         
         raise LLMError(f"Failed to generate response after {max_retries} attempts")
+
+    def _generate_once(
+        self,
+        prompt: str,
+        response_model: type[BaseModel],
+        system: str | None,
+        schema: dict[str, Any] | None,
+    ) -> tuple[BaseModel, LLMUsage]:
+        """One attempt of generate(); failures are classified for the caller's retry policy."""
+        self._last.stop_reason = None
+        try:
+            response_text, usage = self._invoke_model(prompt, system=system, schema=schema)
+            try:
+                if schema is not None:
+                    validated_response = response_model.model_validate(json.loads(response_text))
+                else:
+                    validated_response = self._validate_response(response_text, response_model)
+            except Exception as e:
+                if getattr(self._last, "stop_reason", None) != "max_tokens":
+                    raise
+                # Say why the JSON is incomplete, rather than only where the parser gave up.
+                raise LLMTransientError(
+                    f"Response hit max_tokens ({self.config.max_tokens}) before the JSON was complete "
+                    f"({e}); raise INDEX_MAX_TOKENS or lower INDEX_EFFORT if this repeats"
+                ) from e
+        except Exception as e:
+            error = classify_llm_error(e)
+            self.log.warning("llm_call_failed", error=str(e), retryable=isinstance(error, LLMTransientError))
+            if error is e:
+                raise
+            raise error from e
+        self.total_usage = self.total_usage + usage
+        self.log.info(
+            "llm_response_generated",
+            input_tokens=usage.input_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=f"${usage.total_cost_usd:.4f}",
+        )
+        return validated_response, usage
     
     def _call(
         self,
@@ -247,7 +345,7 @@ class LLMClient:
             message = stream.get_final_message()
 
         if message.stop_reason == "refusal":
-            raise LLMError(f"Model refused the request: {getattr(message, 'stop_details', None)}")
+            raise LLMPermanentError(f"Model refused the request: {getattr(message, 'stop_details', None)}")
         if message.stop_reason == "max_tokens":
             self.log.warning(
                 "response_hit_max_tokens",
@@ -281,6 +379,7 @@ class LLMClient:
             Tuple of (response text, usage stats)
         """
         message, usage = self._call([{"role": "user", "content": prompt}], system=system, schema=schema)
+        self._last.stop_reason = message.stop_reason
         text_content = next((b.text for b in message.content if b.type == "text"), None)
         if text_content is None:
             raise LLMError(f"No text content in response (stop_reason={message.stop_reason})")

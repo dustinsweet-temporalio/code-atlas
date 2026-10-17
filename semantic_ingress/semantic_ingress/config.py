@@ -178,6 +178,30 @@ class MongoConfig:
     server_selection_timeout_ms: int = 10000
 
 
+def _window_size() -> int:
+    size = _env_int("INDEX_WINDOW_SIZE", 5)
+    if size < 1:
+        raise ValueError(f"INDEX_WINDOW_SIZE must be at least 1, got {size}")
+    return size
+
+
+@dataclass(frozen=True)
+class TemporalConfig:
+    """
+    Temporal settings (.env). `sync` runs as a Temporal workflow on this server, with
+    up to `window_size` file or folder summaries generated at a time.
+    """
+
+    address: str = field(default_factory=lambda: _env_str("TEMPORAL_ADDRESS", "localhost:7233"))
+    namespace: str = field(default_factory=lambda: _env_str("TEMPORAL_NAMESPACE", "default"))
+    # Browser-facing URL of the Temporal UI (printed as a link; not used to connect).
+    ui_url: str = field(default_factory=lambda: _env_str("TEMPORAL_UI_URL", "http://localhost:8233"))
+    window_size: int = field(default_factory=_window_size)
+
+    def workflow_url(self, workflow_id: str) -> str:
+        return f"{self.ui_url.rstrip('/')}/namespaces/{self.namespace}/workflows/{workflow_id}"
+
+
 @dataclass
 class IngestionConfig:
     """Root configuration for the ingestion system."""
@@ -192,6 +216,7 @@ class IngestionConfig:
     source: SourceStoreConfig = field(default_factory=SourceStoreConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     mongo: MongoConfig = field(default_factory=MongoConfig)
+    temporal: TemporalConfig = field(default_factory=TemporalConfig)
 
     def __post_init__(self) -> None:
         """Validate and normalize configuration."""

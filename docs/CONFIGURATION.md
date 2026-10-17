@@ -16,8 +16,11 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `INDEX_THINKING` | blank | indexer | As `QUERY_THINKING` |
 | `INDEX_TEMPERATURE` | blank | indexer | As `QUERY_TEMPERATURE` |
 | `INDEX_TIMEOUT_SECONDS` | `300` | indexer | Per-request timeout |
-| `INDEX_API_MAX_RETRIES` | `5` | indexer | SDK retries on rate limits and transient errors |
-| `INDEX_MAX_WORKERS` | `8` | indexer | Parallel LLM calls (`--max-workers` overrides) |
+| `INDEX_API_MAX_RETRIES` | `5` | indexer | SDK retries on rate limits and transient errors (`report` and the other commands; `sync` leaves retries to Temporal) |
+| `INDEX_WINDOW_SIZE` | `5` | indexer | File or folder summaries generated at a time by `sync` (`--window-size` overrides; `--max-workers` is a deprecated alias). Replaces `INDEX_MAX_WORKERS` (default 8) |
+| `TEMPORAL_ADDRESS` | `localhost:7233` (compose: `temporal:7233`) | indexer | Temporal server that runs the `sync` workflow |
+| `TEMPORAL_NAMESPACE` | `default` | both | Temporal namespace |
+| `TEMPORAL_UI_URL` | `http://localhost:8233` | both | Temporal UI as your browser reaches it; printed by `sync` and linked from the chat sidebar |
 | `INDEX_PRICE_INPUT_PER_1M` | `2.00` | indexer | USD per million input tokens, for the cost report only |
 | `INDEX_PRICE_OUTPUT_PER_1M` | `10.00` | indexer | USD per million output tokens, for the cost report only |
 | `INDEX_PRICE_CACHE_READ_MULTIPLIER` | `0.05` | indexer | Prompt-cache reads as a fraction of the input price (0.05 on the 5.5 models, 0.1 on most others), for the cost report only |
@@ -32,10 +35,12 @@ All settings live in `.env` (copy [`.env.example`](../.env.example)). Compose pa
 | `REPORT_RUBRIC_PATH` | built into the image | indexer (`report`) | Path to `temporal-rubric.yaml` (how the report scores processes and Temporal code) |
 | `DB_PREFIX` | `semv2` | both | Database name prefix; must start with `sem` and match on both sides |
 | `APP_PORT` | `8090` | compose | Host port for the UI (bound to localhost) |
+| `TEMPORAL_PORT` | `7233` | compose | Host port for the Temporal server (gRPC, bound to localhost) |
+| `TEMPORAL_UI_PORT` | `8233` | compose | Host port for the Temporal UI (bound to localhost) |
 | `COMPASS_PORT` | `8096` | compose | Host port for Compass Web (bound to localhost), opened by **Open in Compass** |
 | `LOG_LEVEL` | `INFO` | app | Query-side log level |
 
-Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`.
+Set by `compose.yaml` (no need to change): `MONGO_URL=mongodb://mongo:27017`, `SOURCE_DIR=/data/source`, `TEMPORAL_ADDRESS=temporal:7233`, `TEMPORAL_NAMESPACE=default`, `TEMPORAL_UI_URL=http://localhost:${TEMPORAL_UI_PORT:-8233}`, `COMPASS_URL=http://compass:8080`, `COMPASS_PUBLIC_URL=http://localhost:<COMPASS_PORT>`.
 
 ## Changing models
 
@@ -61,3 +66,5 @@ If a request fails with a 400, the error names the rejected parameter. Also upda
 | Process cards | `process_cards` collection in the repository's database; reused by later reports while the files they cite are unchanged |
 | Stored Temporal report | `reports` collection (the latest report, with its commit and versions); cached report steps in `report_cache` |
 | Report rubric | `knowledge/temporal-rubric.yaml`, built into the image at `/app/knowledge` |
+| Sync workflow history | `temporal-data` volume (the dev server's SQLite file) |
+| Staged summaries of a sync in progress | `code_atlas_ingest` database (MongoDB); removed when the run finishes, or after 7 days for an abandoned run |

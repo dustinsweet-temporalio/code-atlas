@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart BT
-    PF["Preflight: knowledge pack, Anthropic, MongoDB, Temporal Docs MCP (stop on failure)"] --> F
+    PF["Preflight: knowledge pack, Anthropic, MongoDB, Temporal server, Temporal Docs MCP (stop on failure)"] --> F
     F["Eligible files in a local git repository (HEAD)"] --> A["LLM summary + Temporal lens of each file"]
     A --> D["Folder summaries + lens roll-ups (deepest first)"]
     D --> P["Parent folders, up to the root"]
@@ -21,11 +21,34 @@ Summaries are written to MongoDB (one database per repository, `<DB_PREFIX>_<nam
 
 Finally, one more LLM call writes a repository-level summary (purpose, major areas, notes) from the root-folder summary and the top-level folder summaries. It is stored as the `repo_summary` document and is what `get_repo_summary` and the repository list show. In incremental runs it is regenerated only when a folder summary changed, or when the index has none yet.
 
-Source: `semantic_ingress/semantic_ingress/core/generation_orchestrator.py`, `artifact_generator.py`, `git_adapter.py`, `source_mirror_orchestrator.py`, `storage/mongo_store.py`.
+Source: `semantic_ingress/semantic_ingress/core/sync_steps.py`, `artifact_generator.py`, `git_adapter.py`, `source_mirror_orchestrator.py`, `storage/mongo_store.py`.
+
+## Indexing runs as a Temporal workflow
+
+```mermaid
+flowchart LR
+    PL["PLAN<br/>pin HEAD, full or incremental,<br/>stage work items"] --> FI["FILES<br/>sliding window"]
+    FI --> LR["LENS_REFRESH<br/>(--refresh-lens)"]
+    LR --> FO["FOLDERS<br/>window per depth level,<br/>deepest first"]
+    FO --> RE["REPO<br/>summary + lens"]
+    RE -->|dry run| CL
+    RE --> DE["DELETE<br/>removed files"] --> PE["PERSIST<br/>(reset first on a full re-index)"]
+    PE --> FN["FINALIZE<br/>lens updates, index_meta,<br/>text indexes"] --> MI["MIRROR"] --> RP["REPORT"] --> DO["DISK_OUTPUT"] --> CL["CLEANUP"]
+```
+
+`semantic-ingress sync` (what `scripts/index.sh` runs) starts the workflow `sync-<name>` on the Temporal server and runs its worker in the same process, inside the indexer container, because the activities need the mounted repository and the source volume. Each phase is an activity or, for files, lens refreshes and folders, a sliding window of activities: up to `INDEX_WINDOW_SIZE` (default 5) run at once, and when one finishes the next starts. A folder is summarised from its child folders, so folders run one depth level at a time with a barrier between levels.
+
+Activities never return summaries to the workflow. They write ready-to-store documents to a staging database (`code_atlas_ingest`, keyed by the run's `sync_id`) and return counts and token usage. Later steps read staging first and the live index second, so a folder sees this run's fresh child summaries and the stored ones of unchanged children. Nothing touches the live index until PERSIST, which writes the staged documents in batches of 500; a full re-index drops the old index just before that.
+
+The workflow keeps only cursors, totals and failures in its state. When Temporal suggests it (event history around 4,000 events, roughly 600 files), the window stops launching, lets the activities in flight finish, and the workflow continues as new with that state. If the process dies or is interrupted, running the same command again attaches to the workflow, and the new worker replays its history and carries on; finished activities are not repeated.
+
+Retries are Temporal's: the LLM client makes one attempt per call, and the activity's retry policy retries rate limits, overload and invalid responses with backoff (using the API's retry-after hint). A file or folder that still fails is recorded and the run continues, as before; a failed persist, mirror or report is recorded too, and the run exits with code 1.
+
+Source: `semantic_ingress/semantic_ingress/temporal/` (`workflow.py`, `activities.py`, `client.py`), `core/sync_steps.py`, `storage/staging_store.py`.
 
 ## The Temporal lens
 
-With `LENS_ENABLED=true` (the default), every run starts with a preflight (`semantic-ingress preflight`; `scripts/index.sh` runs it first) that checks the knowledge pack, the Anthropic API, MongoDB, and the Temporal Docs MCP (a token refresh and a canary search). Any failure stops the run before anything is spent.
+With `LENS_ENABLED=true` (the default), every run starts with a preflight (`semantic-ingress preflight`; `scripts/index.sh` runs it first) that checks the knowledge pack, the Anthropic API, MongoDB, the Temporal server, and the Temporal Docs MCP (a token refresh and a canary search). Any failure stops the run before anything is spent.
 
 Each file's summary call also returns a **lens record**: durable-execution relevance (0-3), the file's role, signals from a closed vocabulary (side effects, waits, hand-rolled retries, status tables, Temporal SDK use, ...), Temporal knowledge-pack concept ids, review-check leads for existing Temporal code, and a short narrative. The pack (`knowledge/temporal-pack.yaml`, checked against the Temporal docs) is sent as a cached system prompt: a conversion view for ordinary code, an evaluation view (with the file language's SDK checks) for code that uses a Temporal SDK. Records are normalised in code (unknown ids dropped, caps enforced).
 

@@ -11,7 +11,7 @@
     status: $("status"), banner: $("banner"), docsStatus: $("docs-status"), docsStatusText: $("docs-status-text"), header: $("chat-header"), chatRepo: $("chat-repo"),
     chatRepoMeta: $("chat-repo-meta"), reportToggle: $("report-toggle"), reportView: $("report-view"),
     reportActions: $("report-actions"), reportSummary: $("report-summary"), reportDetailed: $("report-detailed"),
-    reportDownload: $("report-download"), compassOpen: $("compass-open"),
+    reportDownload: $("report-download"), compassOpen: $("compass-open"), temporalLink: $("temporal-ui-link"),
   };
 
   // ---- storage (per-browser; every access guarded) ----
@@ -474,6 +474,7 @@ ${clone.outerHTML}
     els.repoMeta.textContent = r ? repoMeta(r)
       : state.reposLoaded && !state.repos.size ? "Index one with the CLI (see README)." : "";
     els.repoMeta.title = r ? lensTooltip(r) : "";
+    renderTemporalLink();
   }
 
   async function loadRepos() {
@@ -495,6 +496,24 @@ ${clone.outerHTML}
       if (r) { els.repoMeta.textContent = repoMeta(r); els.repoMeta.title = lensTooltip(r); }
     }
     renderHeader(); renderComposer();
+  }
+
+  // Temporal UI link: the sync workflows of the selected index, or the UI's home page.
+  // The static href in index.html is the fallback when /api/config is unavailable.
+  const temporal = { url: els.temporalLink.href.replace(/\/$/, ""), namespace: "default" };
+  function renderTemporalLink() {
+    const base = `${temporal.url}/namespaces/${encodeURIComponent(temporal.namespace)}/workflows`;
+    els.temporalLink.href = state.selected
+      ? `${base}?query=${encodeURIComponent(`WorkflowId="sync-${state.selected}"`)}`
+      : temporal.url;
+  }
+  async function loadConfig() {
+    try {
+      const c = await (await fetch("/api/config")).json();
+      if (c.temporal_ui_url) temporal.url = c.temporal_ui_url.replace(/\/$/, "");
+      if (c.temporal_namespace) temporal.namespace = c.temporal_namespace;
+    } catch { /* keep the fallback link */ }
+    renderTemporalLink();
   }
 
   // Temporal Docs MCP light: green when a real docs search works, red with the fix otherwise.
@@ -560,7 +579,7 @@ ${clone.outerHTML}
   });
 
   state.activeId = state.conversations[0]?.id ?? null;
-  renderAll(); renderRepoSelect(); loadRepos(); loadHealth();
+  renderAll(); renderRepoSelect(); loadRepos(); loadHealth(); loadConfig();
   setInterval(loadRepos, 30000);
   setInterval(loadHealth, 5 * 60 * 1000);
   els.docsStatus.addEventListener("click", () => {

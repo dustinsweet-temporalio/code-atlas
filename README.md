@@ -8,14 +8,14 @@ Everything runs locally in Docker. What leaves your machine: the LLM calls, whic
 
 ```sh
 cp .env.example .env          # then set ANTHROPIC_API_KEY in .env
-docker compose up --build -d  # MongoDB + the web app
+docker compose up --build -d  # MongoDB, the Temporal dev server and the web app
 python3 scripts/mcp_login.py  # one-time sign-in to the Temporal Docs MCP (for the Temporal lens)
 ./scripts/index.sh /path/to/your/repo [name]
 ```
 
 Skip the sign-in by setting `LENS_ENABLED=false` in `.env` if you do not want the Temporal lens.
 
-Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`), select an index on the left, click **New chat**, and ask your question. Each conversation stays with the index it was started on; the index is shown above the chat and under the conversation's name. Every prompt and answer has a **Copy** button (answers copy as Markdown, ready to paste into Claude Code), and **Open in Compass** above the chat opens the index's database in Compass Web.
+Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`), select an index on the left, click **New chat**, and ask your question. Each conversation stays with the index it was started on; the index is shown above the chat and under the conversation's name. Every prompt and answer has a **Copy** button (answers copy as Markdown, ready to paste into Claude Code), and **Open in Compass** above the chat opens the index's database in Compass Web. Indexing runs are visible in the Temporal UI at <http://localhost:8233> (the **Temporal UI** link at the bottom of the sidebar).
 
 ## Indexing a repository
 
@@ -31,7 +31,16 @@ Open <http://localhost:8090> (change the port with `APP_PORT` in `.env`), select
 - Re-running on the same name is incremental: only files whose content changed are re-summarised. Add `--force` to rebuild the whole index from scratch (for example `./scripts/index.sh ~/code/my-service my-service --force`). An index built by an older version of the indexer is rebuilt automatically the first time, and the run says why. When a new version changes what summaries say (the summary prompt version), existing summaries are kept: changed files get the new version, the run warns, the UI marks the repository "mixed summaries", and `--force` regenerates everything.
 - Before spending money, `docker compose run --rm -v /path/to/repo:/repos/x:ro indexer estimate --repo-path /repos/x` prints a token and cost estimate without calling the API.
 
-The script mounts your folder read-only into the indexer container, so nothing in your repository is modified. It first runs a preflight (knowledge pack, Anthropic API, MongoDB, Temporal Docs MCP) and stops before spending anything if a check fails.
+The script mounts your folder read-only into the indexer container, so nothing in your repository is modified. It first runs a preflight (knowledge pack, Anthropic API, MongoDB, Temporal server, Temporal Docs MCP) and stops before spending anything if a check fails.
+
+### Indexing runs on Temporal
+
+Each run is a Temporal workflow, `sync-<name>`, on the Temporal dev server in `compose.yaml`. The indexer container runs the worker for as long as `index.sh` runs, and prints a link to the workflow in the Temporal UI (<http://localhost:8233>), where you can follow every file, folder and retry.
+
+- **Resume:** if a run crashes, the container is killed, or you press Ctrl-C, run the same `index.sh` command again. It attaches to the running workflow (with the options it was started with) and carries on; finished summaries are not generated or paid for again. Only one run per name can be in progress.
+- **Throughput:** up to 5 file or folder summaries are generated at a time (`INDEX_WINDOW_SIZE` in `.env`, or `--window-size`). The old default was 8 parallel calls, so a run with default settings takes somewhat longer than before; raise the window if your rate limits allow. `--max-workers` still works as an alias.
+- **Retries:** rate limits and transient API errors are retried by Temporal with backoff (honouring the API's retry-after hint), and show up as retries in the UI. A file that still fails is listed at the end of the run, and the next run picks it up again.
+- **Nothing is written to the index until generation is done:** summaries are staged in a separate database (`code_atlas_ingest`) and written to the index in one phase at the end; a full re-index replaces the old index only then.
 
 ## The Temporal lens
 
@@ -87,8 +96,9 @@ All settings are documented in [`.env.example`](.env.example) and [docs/CONFIGUR
 ## How it works
 
 ```
- your git repo ──► indexer ──► MongoDB   (file + folder summaries, text-indexed)
- (read-only)          │
+ your git repo ──► indexer (Temporal worker) ──► MongoDB   (file + folder summaries, text-indexed)
+ (read-only)          │        ▲
+                      │        └── Temporal dev server (the sync workflow; UI on :8233)
                       └──────► source volume (copy of the files, for source retrieval)
 
  browser ──► app (FastAPI + agent) ──► MongoDB, source volume
@@ -98,7 +108,7 @@ All settings are documented in [`.env.example`](.env.example) and [docs/CONFIGUR
 
 | Path | Purpose |
 | --- | --- |
-| [semantic_ingress/](semantic_ingress/README.md) | The indexer: git tree analysis, LLM summaries, MongoDB persistence, source mirroring |
+| [semantic_ingress/](semantic_ingress/README.md) | The indexer: git tree analysis, LLM summaries, MongoDB persistence, source mirroring; `sync` as a Temporal workflow |
 | [code_atlas/](code_atlas/README.md) | The query agent (tools, prompt) and the web server |
 | [web/](web/) | The browser UI (plain HTML/JS, no build step; libraries vendored in `web/vendor/`) |
 | [compose.yaml](compose.yaml), [Dockerfile](Dockerfile) | One image used for both the app and the indexer |
@@ -108,7 +118,7 @@ Questions are answered by an agent that starts at the repository's root summary,
 
 ## Data and housekeeping
 
-- Summaries live in the `mongo-data` Docker volume; mirrored source in `source-data`.
+- Summaries live in the `mongo-data` Docker volume; mirrored source in `source-data`; Temporal workflow history in `temporal-data`.
 - `docker compose down` stops everything and keeps your data. `docker compose down -v` also **deletes the index and the mirrored source**.
 - MongoDB is not published to your host. To look at what an index stores (summaries, lenses, reports), click **Open in Compass** above a chat, or open Compass Web at <http://localhost:8096> (change the port with `COMPASS_PORT` in `.env`). Compass Web is a community build of Compass's web UI (`haohanyang/compass-web`), not an official MongoDB image, and it can edit data as well as view it. For a shell: `docker compose exec mongo mongosh`.
 - Maintenance commands (run through `docker compose run --rm indexer <command> ...`): `sync`, `report`, `preflight`, `estimate`, `dir-list-only`, `source-mirror`. Add `--help` to any of them.
@@ -119,7 +129,9 @@ Questions are answered by an agent that starts at the repository's root summary,
 
 - **Banner says `ANTHROPIC_API_KEY is not set`**: set it in `.env` and run `docker compose up -d` again (containers read `.env` at start).
 - **A different page or a 404 at the URL**: another app is probably using the port. Set `APP_PORT` in `.env`, then `docker compose up -d`.
-- **`429` / rate limit errors while indexing**: lower `INDEX_MAX_WORKERS`. The SDK already retries with backoff.
+- **`429` / rate limit errors while indexing**: lower `INDEX_WINDOW_SIZE` (or pass `--window-size`). Temporal already retries with backoff; the retries are visible in the Temporal UI.
+- **Preflight: `Temporal server not reachable`**: run `docker compose up -d temporal` (the indexer also starts it on demand) and check `TEMPORAL_ADDRESS`.
+- **A run was interrupted**: run the same `index.sh` command again; it resumes the workflow. To abandon it instead, terminate `sync-<name>` in the Temporal UI (staged summaries are removed after 7 days).
 - **Summaries look truncated or JSON errors during indexing**: raise `INDEX_MAX_TOKENS` or lower `INDEX_EFFORT`.
 - **"Not a valid Git repository"**: pass the repository root (the folder that contains `.git`).
 - **Preflight: `No Temporal Docs MCP credentials` or `token refresh refused`**: run `python3 scripts/mcp_login.py` (or set `LENS_ENABLED=false`).

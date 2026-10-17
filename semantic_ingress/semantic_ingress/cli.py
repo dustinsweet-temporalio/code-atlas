@@ -2,12 +2,13 @@
 """
 Command-line interface for the semantic ingress system.
 """
+import asyncio
 import dataclasses
 import json
-from datetime import datetime, timezone
 import logging
 import os
 import re
+import signal
 import sys
 from pathlib import Path
 
@@ -16,19 +17,16 @@ import structlog
 
 from semantic_ingress.config import IngestionConfig
 from semantic_ingress.core import CostEstimator, GenerationOrchestrator
-from semantic_ingress.core.disk_writer import DiskWriter
 from semantic_ingress.core.folder_repair import FolderRepairOrchestrator
-from semantic_ingress.core.llm_client import LLMClient
 from semantic_ingress.preflight import EXIT_CODE as PREFLIGHT_EXIT_CODE
 from semantic_ingress.preflight import PreflightError, PreflightResult, run_preflight
 from semantic_ingress.report.gather import ReportError
-from semantic_ingress.report.run import build_report
+from semantic_ingress.report.service import build_and_store_report
 from semantic_ingress.storage import MongoStore
 
 logger = structlog.get_logger()
 
 DEFAULT_PREFIX = os.environ.get("DB_PREFIX", "").strip() or "semv2"
-DEFAULT_MAX_WORKERS = int(os.environ.get("INDEX_MAX_WORKERS", "").strip() or 8)
 REPO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -46,13 +44,14 @@ def _require_api_key() -> None:
         raise ValueError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
 
 
-def _preflight_or_exit(config: IngestionConfig, stopping: str = "indexing") -> PreflightResult:
+def _preflight_or_exit(config: IngestionConfig, stopping: str = "indexing",
+                       check_temporal: bool = True) -> PreflightResult:
     """Run the preflight checks; on failure print the fix and exit before any LLM spend."""
     print("=" * 80)
     print("PREFLIGHT")
     print("=" * 80)
     try:
-        result = run_preflight(config)
+        result = run_preflight(config, check_temporal=check_temporal)
     except PreflightError as e:
         print(f"❌ {e}")
         print(f"Stopped before {stopping}; nothing was spent or changed.")
@@ -61,38 +60,6 @@ def _preflight_or_exit(config: IngestionConfig, stopping: str = "indexing") -> P
     for check, detail in result.checks:
         print(f"✓ {check:<18} {detail}")
     print("=" * 80 + "\n")
-    return result
-
-
-
-def _build_and_store_report(config: IngestionConfig, checks: PreflightResult, store: MongoStore,
-                            repo_id: str, fresh: bool = False):
-    """
-    Build the Temporal report and store it as the repository's current report.
-
-    On failure the last good report is kept, marked with the failure, and the
-    error is raised to the caller.
-    """
-    source_root = config.source.root / repo_id
-    inv_config = dataclasses.replace(config.llm, effort=config.report.investigate_effort)
-    now = datetime.now(timezone.utc).isoformat()
-    try:
-        result = build_report(
-            LLMClient(config.llm), LLMClient(inv_config), checks.pack, checks.rubric, store, repo_id,
-            checks.docs.search if checks.docs else None,
-            source_root if source_root.is_dir() else None,
-            fresh=fresh,
-        )
-    except Exception as e:
-        previous = store.get_report(repo_id) or {"repo_id": repo_id}
-        store.put_report(repo_id, {**previous, "status": "failed", "error": str(e), "attempted_at": now})
-        raise
-    store.put_report(repo_id, {
-        "repo_id": repo_id, "status": "ok", "error": None, "generated_at": now, "attempted_at": now,
-        "commit_sha": result.data["commit"], "pack_version": checks.pack.version,
-        "rubric_version": checks.rubric.version, "cost_usd": result.data["cost_usd"],
-        "data": result.data, "markdown": result.markdown,
-    })
     return result
 
 
@@ -111,6 +78,183 @@ def cli() -> None:
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+
+def _print_plan(plan) -> None:
+    """The mode header the in-process sync printed when it started generating."""
+    print("\n" + "=" * 80)
+    if plan.mode == "full":
+        print(f"MODE: FULL INDEX ({plan.reason})")
+    else:
+        print("MODE: INCREMENTAL (comparing index vs Git state)")
+    print("=" * 80 + "\n")
+    for warning in plan.warnings:
+        print(warning + "\n")
+    if plan.mode == "incremental":
+        print("Delta Summary:")
+        print(f"  Added:     {plan.n_added:,} files")
+        print(f"  Modified:  {plan.n_modified:,} files")
+        print(f"  Deleted:   {plan.n_deleted:,} files")
+        print(f"  Unchanged: {plan.n_unchanged:,} files")
+        print()
+    print(f"Files to summarise: {plan.n_files:,}"
+          + (f" | lens refresh: {plan.n_lens_only:,} unchanged files" if plan.n_lens_only else ""))
+    print()
+
+
+def _render_outcome(outcome, repo_id: str, log) -> int:
+    """Print the end of the run as the in-process sync did; returns the exit code."""
+    from semantic_ingress.temporal.client import usage_cost
+
+    plan = outcome.plan
+    usage = outcome.usage
+    failed_count = len(outcome.failed) + outcome.failed_overflow
+
+    print("\n" + "=" * 80)
+    print(f"{'FULL' if plan.mode == 'full' else 'INCREMENTAL'} SYNC COMPLETE")
+    print("=" * 80)
+    print(f"Files processed:     {outcome.files_done:,}")
+    print(f"Folders summarised:  {outcome.folders_generated:,}")
+    print(f"Total Input Tokens:  {usage.input_tokens:,}")
+    if usage.cache_read_tokens or usage.cache_write_tokens:
+        print(f"Cache Read Tokens:   {usage.cache_read_tokens:,}")
+        print(f"Cache Write Tokens:  {usage.cache_write_tokens:,}")
+    print(f"Total Output Tokens: {usage.output_tokens:,}")
+    print(f"Total Cost:          ${usage_cost(usage):.4f}")
+    if outcome.continued_as_new_count:
+        print(f"Workflow runs:       {outcome.continued_as_new_count + 1} (continued as new)")
+    print("=" * 80)
+    print(f"\nTotal cost: ${usage_cost(usage):.4f}")
+
+    if outcome.dry_run:
+        print("\n" + "=" * 80)
+        print("DRY-RUN COMPLETE - No changes made to the index")
+        print("=" * 80)
+        if plan.reset_index:
+            print("Would replace the existing index (full re-index)")
+        if plan.n_deleted:
+            print(f"Would delete the summaries of {plan.n_deleted:,} removed files")
+        print(f"Would upsert {outcome.would_upsert or 0} documents")
+        if outcome.would_update_lens:
+            print(f"Would update the lens of {outcome.would_update_lens} unchanged files")
+        if failed_count:
+            print(f"Failed items: {failed_count}")
+        print()
+        log.info("dry_run_complete")
+        return 0
+
+    if outcome.deleted is not None:
+        print("=" * 80)
+        print(f"DELETED {plan.n_deleted} REMOVED FILES FROM INDEX")
+        print("=" * 80)
+        print(f"✓ Deleted {outcome.deleted.files_deleted} file summary artifacts")
+        print(f"✓ Deleted {outcome.deleted.folders_deleted} orphaned folder summary artifacts")
+        print("=" * 80 + "\n")
+    elif outcome.delete_error:
+        print(f"❌ Failed to delete the summaries of removed files: {outcome.delete_error}\n")
+
+    print("\n" + "=" * 80)
+    print("PERSISTING TO INDEX")
+    print("=" * 80)
+    if plan.reset_index:
+        print("Replaced the existing index (full re-index)")
+    if outcome.persist_error:
+        log.error("index_persistence_failed", error=outcome.persist_error)
+        print(f"\n❌ Index persistence failed: {outcome.persist_error}")
+        print("Re-run the sync command to retry.\n")
+    else:
+        persist = outcome.persist
+        if outcome.finalize is not None and outcome.finalize.lens_refreshed is not None:
+            print(f"Lens refreshed:  {outcome.finalize.lens_refreshed} unchanged files")
+        print(f"Total processed: {persist.processed}")
+        print(f"Inserted:        {persist.inserted}")
+        print(f"Updated:         {persist.updated}")
+        print(f"No change:       {persist.no_change}")
+        print(f"Errors:          {persist.errors}")
+        print("=" * 80 + "\n")
+        log.info("index_persistence_complete", **dataclasses.asdict(persist))
+
+        if outcome.finalize is not None:
+            print("=" * 80)
+            print("CREATING TEXT INDEXES (FULL INDEX MODE)" if plan.mode == "full" else "VALIDATING TEXT INDEXES")
+            print("=" * 80)
+            for line in outcome.finalize.index_messages:
+                print(line)
+            print("\n" + "=" * 80)
+            print("INDEX CREATION COMPLETE" if plan.mode == "full" else "INDEX VALIDATION COMPLETE")
+            print("=" * 80 + "\n")
+        elif outcome.finalize_error:
+            print(f"❌ Recording index metadata and text indexes failed: {outcome.finalize_error}\n")
+
+    mirror = outcome.mirror
+    if mirror is not None and mirror.error:
+        print(f"\n❌ Source mirror failed: {mirror.error}\n")
+
+    report = outcome.report
+    if report is not None and report.status == "ok":
+        print(f"✓ Report stored in the index | cost ${report.cost_usd:.4f}")
+        print("=" * 80 + "\n")
+    elif report is not None and report.status == "failed":
+        log.error("report_failed", error=report.error)
+        print(f"⚠️  Temporal report failed ({report.error}). The index is complete; "
+              f"run ./scripts/report.sh {repo_id} to retry.")
+        print("=" * 80 + "\n")
+
+    if outcome.disk_written is not None:
+        print(f"✓ Wrote {outcome.disk_written} artifacts to disk\n")
+    elif outcome.disk_error:
+        log.error("disk_write_failed", error=outcome.disk_error)
+        print(f"⚠️  Disk write failed: {outcome.disk_error}\n")
+
+    mirror_failures = mirror.total_failures if mirror is not None else 0
+    index_failed = bool(outcome.persist_error or outcome.finalize_error)
+    if failed_count or mirror_failures or index_failed:
+        print("\n" + "=" * 80)
+        print("⚠️  SYNC COMPLETED WITH FAILURES")
+        print("=" * 80)
+
+        if failed_count:
+            print(f"\n❌ SEMANTIC GENERATION FAILURES: {failed_count}")
+            print("-" * 80)
+            for item in outcome.failed:
+                print(f"  • {item.path}")
+                print(f"    Error: {item.error}")
+            if outcome.failed_overflow:
+                print(f"  ... and {outcome.failed_overflow} more")
+
+        if index_failed:
+            print("\n❌ INDEX WRITE FAILURES")
+            print("-" * 80)
+            for label, error in (("Persist", outcome.persist_error), ("Finalize", outcome.finalize_error)):
+                if error:
+                    print(f"  • {label}: {error}")
+
+        if mirror_failures:
+            print(f"\n❌ SOURCE MIRROR FAILURES: {mirror_failures}")
+            print("-" * 80)
+            if mirror.failed_uploads:
+                print("Failed uploads:")
+                for path, error in mirror.failed_uploads:
+                    print(f"  • {path}")
+                    print(f"    Error: {error}")
+            if mirror.failed_deletes:
+                print("\nFailed deletions:")
+                for path, error in mirror.failed_deletes:
+                    print(f"  • {path}")
+                    print(f"    Error: {error}")
+            if mirror.error:
+                print(f"  • {mirror.error}")
+
+        print()
+        print("Re-run the sync command to retry failed operations.")
+        print("The system will automatically resume from the current state.")
+        print("=" * 80 + "\n")
+        log.warning("sync_completed_with_failures", semantic_failures=failed_count, mirror_failures=mirror_failures)
+        return 1
+
+    print("✓ Sync completed successfully (including source mirror)\n")
+    log.info("sync_complete")
+    return 0
 
 
 @cli.command()
@@ -147,17 +291,24 @@ def cli() -> None:
     help="Preview changes without modifying the index.",
 )
 @click.option(
+    "--window-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="File or folder summaries generated at a time. Defaults to INDEX_WINDOW_SIZE (5).",
+)
+@click.option(
     "--max-workers",
-    type=int,
-    default=DEFAULT_MAX_WORKERS,
-    show_default=True,
-    help="Maximum number of parallel LLM workers. Defaults to INDEX_MAX_WORKERS.",
+    type=click.IntRange(min=1),
+    default=None,
+    hidden=True,
+    help="Deprecated alias of --window-size.",
 )
 @click.option(
     "--resume-cache",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     default=None,
-    help="Path to cached documents pickle file to skip regeneration.",
+    hidden=True,
+    help="Removed: re-run sync and the Temporal workflow resumes.",
 )
 @click.option(
     "--force",
@@ -177,29 +328,47 @@ def cli() -> None:
     default=False,
     help="Skip the Temporal report that normally follows indexing when the lens is on.",
 )
+@click.option(
+    "--can-after",
+    type=click.IntRange(min=1),
+    default=None,
+    hidden=True,
+    help="Testing: continue the workflow as new after N completed items.",
+)
 def sync(
     repo_path: Path,
     repo_id: str,
     prefix: str,
     output_dir: Path | None,
     dry_run: bool,
-    max_workers: int,
-    resume_cache: bool,
+    window_size: int | None,
+    max_workers: int | None,
+    resume_cache: Path | None,
     force: bool,
     refresh_lens: bool,
     no_report: bool,
+    can_after: int | None,
 ) -> None:
     """
     Synchronize repository state to the semantic index.
-    
-    Automatically detects full vs incremental mode by querying the index.
-    Generates all artifacts in-memory and persists atomically.
+
+    Runs as a Temporal workflow (sync-<repo-id>) with a worker embedded in this
+    process. Automatically detects full vs incremental mode by querying the index.
+    Re-running after a crash or Ctrl-C resumes the same workflow.
     """
+    if resume_cache is not None:
+        raise click.UsageError("--resume-cache was removed; re-run sync and the Temporal workflow resumes")
+
+    from temporalio.client import WorkflowFailureError
+
+    from semantic_ingress.temporal.client import start_or_attach
+    from semantic_ingress.temporal.constants import workflow_id
+    from semantic_ingress.temporal.models import SyncParams
+
     log = logger.bind(mode="sync", repo_id=repo_id, prefix=prefix, dry_run=dry_run)
     log.info("starting_sync")
-    
+
     try:
-        # Initialize config
         config = IngestionConfig(
             repo_path=repo_path,
             output_dir=Path("/tmp"),  # Not used during generation
@@ -207,229 +376,55 @@ def sync(
             prefix=prefix,
         )
         log.info("configuration_loaded", repo_id=config.repo_id)
+        if max_workers is not None and window_size is None:
+            print("ℹ️  --max-workers is deprecated; use --window-size.")
+        if os.environ.get("INDEX_MAX_WORKERS", "").strip() and not os.environ.get("INDEX_WINDOW_SIZE", "").strip():
+            print("ℹ️  INDEX_MAX_WORKERS is no longer used; set INDEX_WINDOW_SIZE (default 5) instead.")
+        window = window_size or max_workers or config.temporal.window_size
 
         _require_api_key()
         preflight = _preflight_or_exit(config)
 
-        # Initialize orchestrator and index store
-        orchestrator = GenerationOrchestrator(config, max_workers=max_workers)
-        if preflight.docs is not None:
-            orchestrator.docs_search = preflight.docs.search
-        agent_client = MongoStore(config.mongo, config.prefix)
-        
-        # Run unified sync
-        log.info("starting_unified_sync")
-        if resume_cache:
-            import pickle
-            from types import SimpleNamespace
-            print(f"\n{'='*80}")
-            print(f"RESUMING FROM CACHE: {resume_cache}")
-            print(f"{'='*80}\n")
-            with open(resume_cache, 'rb') as f:
-                result = SimpleNamespace(
-                    documents=pickle.load(f),
-                    usage=SimpleNamespace(total_cost_usd=0),
-                    failed_items=[],
-                    delta=None,
-                    current_snapshot=None,
-                    reset_index=False,
-                    lens_updates=[],
-                )
-            print(f"Loaded {len(result.documents)} documents from cache\n")
-        else:
-            result = orchestrator.sync(agent_client, dry_run=dry_run, force=force, refresh_lens=refresh_lens)
-        
-        # Display summary
-        print(f"\nTotal cost: ${result.usage.total_cost_usd:.4f}")
-        
-        if dry_run:
-            print("\n" + "=" * 80)
-            print("DRY-RUN COMPLETE - No changes made to the index")
-            print("=" * 80)
-            if result.reset_index:
-                print("Would replace the existing index (full re-index)")
-            print(f"Would upsert {len(result.documents)} documents")
-            if result.lens_updates:
-                print(f"Would update the lens of {len(result.lens_updates)} unchanged files")
-            if result.failed_items:
-                print(f"Failed items: {len(result.failed_items)}")
-            print()
-            log.info("dry_run_complete")
-            return
-        
-        # Persist to the index
-        if result.documents:
-            log.info("persisting_to_index", document_count=len(result.documents))
-            print("\n" + "=" * 80)
-            print("PERSISTING TO INDEX")
-            print("=" * 80)
-            
-            try:
-                # A full re-index replaces the old index only now, after generation
-                # succeeded, so a failed run never leaves the repository unindexed.
-                if result.reset_index:
-                    print("Replacing the existing index (full re-index)...")
-                    agent_client.reset_repository(repo_id)
-
-                upsert_result = agent_client.upsert_documents_bulk(result.documents)
-                if result.lens_updates:
-                    updated = agent_client.update_file_lenses(repo_id, result.lens_updates)
-                    print(f"Lens refreshed:  {updated} unchanged files")
-
-                print(f"Total processed: {upsert_result['total_processed']}")
-                print(f"Inserted:        {upsert_result['summary']['inserted']}")
-                print(f"Updated:         {upsert_result['summary']['updated']}")
-                print(f"No change:       {upsert_result['summary']['no_change']}")
-                print(f"Errors:          {upsert_result['summary']['errors']}")
-                print("=" * 80 + "\n")
-                
-                log.info("index_persistence_complete", **upsert_result)
-
-                # Record how this index was built (layout version, model, commit).
-                commit_sha = (
-                    result.current_snapshot.commit_sha
-                    if result.current_snapshot is not None
-                    else result.documents[0].commit_sha
-                )
-                agent_client.put_index_meta(orchestrator.build_index_meta(
-                    commit_sha, agent_client.lens_pack_versions(repo_id), agent_client.prompt_versions(repo_id)
-                ))
-
-                # Check for upsert errors
-                if upsert_result['summary']['errors'] > 0:
-                    print("⚠️  SYNC PARTIALLY FAILED")
-                    print("Some documents failed to persist to the index.")
-                    print("Re-run the sync command to retry failed operations.")
-                    print()
-
-                # ✅ VALIDATE INDEXES AFTER PERSISTENCE
-                # Skip validation on full index (indexes don't exist yet)
-                if result.delta is None:
-                    # Full index - create indexes without validation
-                    print("=" * 80)
-                    print("CREATING TEXT INDEXES (FULL INDEX MODE)")
-                    print("=" * 80)
-                    orchestrator._create_indexes_without_validation(agent_client)
-                    print("\n" + "=" * 80)
-                    print("INDEX CREATION COMPLETE")
-                    print("=" * 80 + "\n")
-                else:
-                    # Incremental - validate and ensure indexes
-                    print("=" * 80)
-                    print("VALIDATING TEXT INDEXES")
-                    print("=" * 80)
-                    orchestrator._validate_and_ensure_indexes(agent_client)
-                    print("\n" + "=" * 80)
-                    print("INDEX VALIDATION COMPLETE")
-                    print("=" * 80 + "\n")
-                    
-                
-            except Exception as e:
-                log.error("index_persistence_failed", error=str(e))
-                print(f"\n❌ Index persistence failed: {e}")
-                print("No artifacts written to disk (index persistence must succeed first).")
-                print("Re-run the sync command to retry.\n")
-                # sys.exit(1)
-        else:
-            log.info("no_documents_to_persist")
-            print("\nNo documents to persist (repository unchanged).")
-
-        # Source mirroring
-        log.info("starting_source_mirror")
-        mirror_result = orchestrator._run_source_mirror(
-            result.current_snapshot,
-            result.delta,
-            dry_run
+        params = SyncParams(
+            repo_id=repo_id,
+            prefix=prefix,
+            repo_path=str(repo_path),
+            dry_run=dry_run,
+            force=force,
+            refresh_lens=refresh_lens,
+            no_report=no_report,
+            output_dir=str(output_dir) if output_dir else None,
+            window_size=window,
+            lens_enabled=config.lens.enabled,
+            test_can_after_items=can_after,
         )
+        ui_link = config.temporal.workflow_url(workflow_id(repo_id))
 
-        # Temporal report (lens on): after persistence and the source mirror, which it reads.
-        # It runs when the index changed or no good report exists; a failure never fails the index.
-        if config.lens.enabled and not dry_run and not no_report:
-            stored = agent_client.get_report(repo_id)
-            if result.documents or result.lens_updates or not stored or stored.get("status") != "ok":
-                print("=" * 80)
-                print("TEMPORAL REPORT")
-                print("=" * 80)
-                try:
-                    report_result = _build_and_store_report(config, preflight, agent_client, repo_id)
-                    print(f"✓ Report stored in the index | cost ${report_result.usage.total_cost_usd:.4f}")
-                except Exception as e:
-                    log.error("report_failed", error=str(e))
-                    print(f"⚠️  Temporal report failed ({e}). The index is complete; "
-                          f"run ./scripts/report.sh {repo_id} to retry.")
-                print("=" * 80 + "\n")
-        
-        # Optional disk output (AFTER successful persistence)
-        if output_dir and result.documents:
-            log.info("writing_artifacts_to_disk", output_dir=str(output_dir))
-            print("=" * 80)
-            print(f"WRITING ARTIFACTS TO DISK: {output_dir}")
-            print("=" * 80)
-            
-            try:
-                writer = DiskWriter(output_dir)
-                writer.write_documents(result.documents)
-                print(f"✓ Wrote {len(result.documents)} artifacts to disk")
-                print("=" * 80 + "\n")
-                log.info("disk_output_complete")
-            except Exception as e:
-                log.error("disk_write_failed", error=str(e))
-                print(f"⚠️  Disk write failed: {e}")
-                print("(index persistence succeeded, artifacts not written to disk)")
-                print()
-        
-        # Final summary (including source mirror results)
-        if result.failed_items or mirror_result.has_failures:
-            print("\n" + "=" * 80)
-            print("⚠️  SYNC COMPLETED WITH FAILURES")
-            print("=" * 80)
-            
-            # Show semantic generation failures
-            if result.failed_items:
-                print(f"\n❌ SEMANTIC GENERATION FAILURES: {len(result.failed_items)}")
-                print("-" * 80)
-                for path, error in result.failed_items:
-                    print(f"  • {path}")
-                    print(f"    Error: {error}")
-            
-            # Show source mirror failures
-            if mirror_result.has_failures:
-                print(f"\n❌ SOURCE MIRROR FAILURES: {mirror_result.total_failures}")
-                print("-" * 80)
-                
-                if mirror_result.failed_uploads:
-                    print("Failed uploads:")
-                    for path, error in mirror_result.failed_uploads:
-                        print(f"  • {path}")
-                        print(f"    Error: {error}")
-                
-                if mirror_result.failed_deletes:
-                    print("\nFailed deletions:")
-                    for path, error in mirror_result.failed_deletes:
-                        print(f"  • {path}")
-                        print(f"    Error: {error}")
-            
-            print()
-            print("Re-run the sync command to retry failed operations.")
-            print("The system will automatically resume from the current state.")
-            print("=" * 80 + "\n")
-            
-            log.warning(
-                "sync_completed_with_failures",
-                semantic_failures=len(result.failed_items),
-                mirror_failures=mirror_result.total_failures,
-            )
-            
-            # Exit with error code if any failures occurred
-            sys.exit(1)
-        else:
-            print("✓ Sync completed successfully (including source mirror)\n")
-            log.info("sync_complete")
-        
+        def interrupted(signum, frame):
+            # The workflow lives on the server; exit at once rather than wait for the
+            # worker's in-flight activities (they time out and are retried on resume).
+            print(f"\nInterrupted. The workflow keeps running on the server; re-run the same command "
+                  f"to resume (UI: {ui_link})", flush=True)
+            os._exit(130)
+
+        signal.signal(signal.SIGINT, interrupted)
+        print(f"Window: {window} summaries at a time (Temporal {config.temporal.address})")
+        run = asyncio.run(start_or_attach(config, preflight, params, on_plan=_print_plan))
+        exit_code = _render_outcome(run.outcome, repo_id, log)
+    except WorkflowFailureError as e:
+        cause = e.cause
+        while getattr(cause, "cause", None) is not None:
+            cause = cause.cause
+        message = getattr(cause, "message", None) or str(cause or e)
+        log.error("sync_failed", error=message)
+        print(f"\n❌ Sync failed: {message}\n")
+        sys.exit(1)
     except Exception as e:
         log.error("sync_failed", error=str(e))
         print(f"\n❌ Sync failed: {e}\n")
         sys.exit(1)
+    sys.exit(exit_code)
+
 
 @cli.command()
 @click.option(
@@ -623,8 +618,9 @@ def repair_folders(
 )
 def preflight(prefix: str) -> None:
     """
-    Check the knowledge pack, Anthropic API, MongoDB and (lens on) the Temporal
-    Docs MCP. Exits with code 2 on the first failure. `sync` runs this first.
+    Check the knowledge pack, Anthropic API, MongoDB, the Temporal server and
+    (lens on) the Temporal Docs MCP. Exits with code 2 on the first failure.
+    `sync` runs this first.
     """
     config = IngestionConfig(repo_path=Path("."), output_dir=Path("/tmp"), prefix=prefix)
     try:
@@ -679,9 +675,9 @@ def report(repo_id: str, prefix: str, out_dir: Path, fresh: bool) -> None:
     except ValueError as e:
         print(f"❌ {e}")
         sys.exit(PREFLIGHT_EXIT_CODE)
-    checks = _preflight_or_exit(config, stopping="the report")
+    checks = _preflight_or_exit(config, stopping="the report", check_temporal=False)
     try:
-        result = _build_and_store_report(config, checks, MongoStore(config.mongo, prefix), repo_id, fresh)
+        result = build_and_store_report(config, checks, MongoStore(config.mongo, prefix), repo_id, fresh)
     except ReportError as e:
         print(f"\n❌ {e}\n")
         sys.exit(1)

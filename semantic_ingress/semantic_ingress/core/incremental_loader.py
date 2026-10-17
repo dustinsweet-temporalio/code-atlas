@@ -5,6 +5,7 @@ Incremental loader for retrieving previous repository state from the index.
 import structlog
 
 from semantic_ingress.models import FileSnapshot, RepositorySnapshot
+from semantic_ingress.storage.mongo_store import MongoStoreError
 
 logger = structlog.get_logger()
 
@@ -22,12 +23,16 @@ class IncrementalLoader:
         self.agent = agent_client
         self.log = logger.bind(component="incremental_loader")
 
-    def load_previous_snapshot(self, repo_id: str) -> RepositorySnapshot | None:
+    def load_previous_snapshot(self, repo_id: str, strict: bool = False) -> RepositorySnapshot | None:
         """
         Load previous repository snapshot from the index.
 
         Args:
             repo_id: Repository identifier
+            strict: Raise MongoStoreError when the index cannot be read, instead of
+                returning None. None means "run a full index", so the Temporal sync
+                uses strict=True: a transient database error is retried rather than
+                turning into a full re-index.
 
         Returns:
             RepositorySnapshot if found, None if collection doesn't exist or is empty
@@ -85,5 +90,9 @@ class IncrementalLoader:
                 repo_id=repo_id,
                 error=str(e),
             )
+            if strict:
+                if isinstance(e, MongoStoreError):
+                    raise
+                raise MongoStoreError(f"Loading the previous snapshot of {repo_id} failed: {e}") from e
             return None
 

@@ -48,6 +48,10 @@ li.item:hover .del { visibility: visible; }
 .muted { color: var(--muted); font-size: 13px; }
 #status { font-size: 12px; }
 .sidebar-foot { margin-top: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.temporal-link {
+  align-self: flex-start; padding: 2px 0; color: var(--muted); font-size: 12px; text-decoration: none;
+}
+.temporal-link:hover { color: var(--text); text-decoration: underline; }
 .docs-status {
   display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 2px 0;
   border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer;

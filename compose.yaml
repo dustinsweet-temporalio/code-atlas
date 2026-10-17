@@ -5,10 +5,17 @@
 #   ./scripts/index.sh /path/to/a/git/repo [name]
 #
 # Open http://localhost:8090 (Compass Web, for browsing the stored indexes: http://localhost:8096)
+# and http://localhost:8233 (Temporal UI: indexing runs).
+# Indexing (`sync`) runs as a Temporal workflow on the `temporal` dev server below;
+# re-running index.sh after a crash or Ctrl-C resumes it.
 
 x-app-env: &app-env
   MONGO_URL: mongodb://mongo:27017
   SOURCE_DIR: /data/source
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_NAMESPACE: default
+  # Browser-facing link to the Temporal UI (printed by sync, shown in the chat sidebar).
+  TEMPORAL_UI_URL: http://localhost:${TEMPORAL_UI_PORT:-8233}
   # Compass Web, from inside the network (to look up its connection) and from the browser
   COMPASS_URL: http://compass:8080
   COMPASS_PUBLIC_URL: http://localhost:${COMPASS_PORT:-8096}
@@ -21,6 +28,24 @@ services:
       - mongo-data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Temporal dev server (single process, SQLite file on a volume so workflow
+  # history survives restarts). gRPC on 7233, UI on 8233.
+  temporal:
+    image: temporalio/temporal:1.9.1
+    restart: unless-stopped
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/home/temporal/temporal.db"]
+    ports:
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8233}:8233"
+    volumes:
+      # The image runs as `temporal` (uid 1000), which owns its home directory.
+      - temporal-data:/home/temporal
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -74,10 +99,13 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      temporal:
+        condition: service_healthy
 
 volumes:
   mongo-data:
   source-data:
+  temporal-data:
 
 networks:
   default:
