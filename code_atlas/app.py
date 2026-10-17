@@ -6,6 +6,7 @@ Serves the chat UI and a small API:
     GET  /api/health   service status (database, API key, model)
     GET  /api/repos    indexed repositories
     GET  /api/report/{repo_id}  the stored Temporal report (data for the report view)
+    GET  /api/report/{repo_id}/markdown  the detailed report as Markdown (as ./scripts/report.sh writes it)
     POST /api/chat     streaming (SSE) answer for a conversation about one index ({repo_id, messages})
 
 Run with: uvicorn app:app --host 0.0.0.0 --port 8080
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import List, Literal
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -117,9 +118,8 @@ def list_repos():
         return JSONResponse({"error": str(e)}, status_code=503)
 
 
-@app.get("/api/report/{repo_id}")
-def get_report(repo_id: str):
-    """The Temporal report stored with an index (built during indexing), with its freshness."""
+def _stored_report(repo_id: str) -> tuple[dict, dict] | JSONResponse:
+    """The stored report document and the index's meta document, or the error response to send."""
     if not re.match(r"^[A-Za-z0-9_-]+$", repo_id):
         return JSONResponse({"error": "Invalid index name."}, status_code=400)
     try:
@@ -132,6 +132,16 @@ def get_report(repo_id: str):
     if not doc or not doc.get("data"):
         detail = f" The last attempt failed: {doc.get('error')}" if doc and doc.get("error") else ""
         return JSONResponse({"error": f"No Temporal report for this index yet.{detail}"}, status_code=404)
+    return doc, meta
+
+
+@app.get("/api/report/{repo_id}")
+def get_report(repo_id: str):
+    """The Temporal report stored with an index (built during indexing), with its freshness."""
+    found = _stored_report(repo_id)
+    if isinstance(found, JSONResponse):
+        return found
+    doc, meta = found
     index_commit = meta.get("commit_sha")
     return {
         "status": doc.get("status"), "error": doc.get("error"),
@@ -140,6 +150,26 @@ def get_report(repo_id: str):
         "stale": bool(index_commit and doc.get("commit_sha") and index_commit != doc["commit_sha"]),
         "data": doc["data"],
     }
+
+
+@app.get("/api/report/{repo_id}/markdown")
+def get_report_markdown(repo_id: str):
+    """The detailed Temporal report: the full Markdown document ./scripts/report.sh writes."""
+    found = _stored_report(repo_id)
+    if isinstance(found, JSONResponse):
+        return found
+    doc, _ = found
+    markdown = doc.get("markdown")
+    if not markdown:
+        # A report stored without its Markdown: render it from the data, as the indexer does.
+        from semantic_ingress.report.render import render
+
+        try:
+            markdown = render(doc["data"])
+        except Exception as e:
+            logger.error(f"Failed to render the detailed report for {repo_id}: {e}", exc_info=True)
+            return JSONResponse({"error": f"Could not render the detailed report: {e}"}, status_code=500)
+    return PlainTextResponse(markdown, media_type="text/markdown")
 
 
 @app.post("/api/chat")

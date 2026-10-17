@@ -10,6 +10,8 @@
     repoSelect: $("repo-select"), repoMeta: $("repo-meta"), convs: $("conversations"), newChat: $("new-chat"),
     status: $("status"), banner: $("banner"), docsStatus: $("docs-status"), docsStatusText: $("docs-status-text"), header: $("chat-header"), chatRepo: $("chat-repo"),
     chatRepoMeta: $("chat-repo-meta"), reportToggle: $("report-toggle"), reportView: $("report-view"),
+    reportActions: $("report-actions"), reportSummary: $("report-summary"), reportDetailed: $("report-detailed"),
+    reportDownload: $("report-download"),
   };
 
   // ---- storage (per-browser; every access guarded) ----
@@ -23,12 +25,15 @@
   const state = {
     conversations: load(), activeId: null, streaming: false, controller: null,
     repos: new Map(), reposLoaded: false, repoIds: "", selected: loadSelected(), view: "chat",
+    // The loaded report: {repo, payload, markdown (fetched on first use), mode: "summary" | "detailed"}.
+    report: null,
   };
 
   // ---- markdown ----
   marked.setOptions({ gfm: true, breaks: false });
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-    if (node.tagName === "A") { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+    // In-page links (the detailed report's process table) stay in the page.
+    if (node.tagName === "A" && !(node.getAttribute("href") || "").startsWith("#")) { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
   });
   const render = (el, text) => {
     el.innerHTML = DOMPurify.sanitize(marked.parse(text));
@@ -156,17 +161,30 @@
   const renderAll = () => { showChat(); renderSidebar(); renderHeader(); renderMessages(); renderComposer(); };
 
   // ---- Temporal report view (the conversation's index) ----
+  // Two views of one report: the summary (rendered from the report data) and the
+  // detailed report (the full Markdown document the indexer writes). Each downloads
+  // as what it is: the summary as a standalone HTML page, the detailed report as .md.
   function showChat() {
     state.view = "chat";
     els.reportView.hidden = true; els.messages.hidden = false; els.form.hidden = false;
+    els.reportActions.hidden = true;
     els.reportToggle.textContent = "Temporal report";
   }
+
+  const reportMessage = (text) => {
+    els.reportView.innerHTML = "";
+    const p = document.createElement("p"); p.className = "muted report"; p.textContent = text;
+    els.reportView.appendChild(p);
+  };
+  // The view still shows this report in this mode (the user may have moved on during a fetch).
+  const reportCurrent = (r, mode) => state.view === "report" && state.report === r && r.mode === mode && active()?.repo === r.repo;
 
   async function showReport() {
     const c = active();
     if (!c || !c.repo) return;
-    state.view = "report";
+    state.view = "report"; state.report = null;
     els.messages.hidden = true; els.form.hidden = true; els.reportView.hidden = false;
+    els.reportActions.hidden = true;
     els.reportToggle.textContent = "Back to chat";
     els.reportView.innerHTML = '<div class="report"><p class="muted">Loading the report…</p></div>';
     try {
@@ -181,7 +199,24 @@
         els.reportView.appendChild(empty);
         return;
       }
-      window.renderTemporalReport(els.reportView, body, {
+      state.report = { repo: c.repo, payload: body, markdown: null, mode: "summary" };
+      els.reportActions.hidden = false;
+      showReportMode("summary");
+    } catch (e) {
+      reportMessage(`Could not load the report: ${e.message}`);
+    }
+  }
+
+  async function showReportMode(mode) {
+    const r = state.report;
+    if (!r) return;
+    r.mode = mode;
+    els.reportSummary.setAttribute("aria-pressed", String(mode === "summary"));
+    els.reportDetailed.setAttribute("aria-pressed", String(mode === "detailed"));
+    els.reportDownload.title = mode === "summary" ? "Download the summary as an HTML page" : "Download the detailed report as Markdown";
+    els.reportDownload.disabled = mode === "detailed" && !r.markdown;
+    if (mode === "summary") {
+      window.renderTemporalReport(els.reportView, r.payload, {
         onDiscuss: (name) => {
           showChat(); renderMessages(); renderComposer();
           els.input.value = `Tell me about the Temporal opportunity for "${name}": what would change, and what would we gain?`;
@@ -189,11 +224,92 @@
         },
       });
       els.reportView.scrollTop = 0;
-    } catch (e) {
-      els.reportView.innerHTML = "";
-      const p = document.createElement("p"); p.className = "muted report"; p.textContent = `Could not load the report: ${e.message}`;
-      els.reportView.appendChild(p);
+      return;
     }
+    if (!r.markdown) {
+      els.reportView.innerHTML = '<div class="report"><p class="muted">Loading the detailed report…</p></div>';
+      try {
+        const res = await fetch(`/api/report/${encodeURIComponent(r.repo)}/markdown`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          if (reportCurrent(r, "detailed")) reportMessage(`Could not load the detailed report: ${body.error || res.statusText}`);
+          return;
+        }
+        r.markdown = await res.text();
+      } catch (e) {
+        if (reportCurrent(r, "detailed")) reportMessage(`Could not load the detailed report: ${e.message}`);
+        return;
+      }
+      if (!reportCurrent(r, "detailed")) return;
+      els.reportDownload.disabled = false;
+    }
+    renderDetailedReport(r);
+  }
+
+  // Heading anchors the way the report renderer writes its links (render.py _anchor).
+  const anchor = (text) => [...text.toLowerCase().replace(/ /g, "-")].filter((ch) => /[\p{L}\p{N}-]/u.test(ch)).join("");
+
+  function renderDetailedReport(r) {
+    els.reportView.innerHTML = "";
+    const wrap = document.createElement("div"); wrap.className = "report md-report";
+    if (r.payload.stale) {
+      const n = document.createElement("p"); n.className = "notice";
+      n.textContent = "The code has changed since this report was built. It will update on the next index run.";
+      wrap.appendChild(n);
+    }
+    const doc = document.createElement("div");
+    render(doc, r.markdown);
+    // Anchors as data attributes, not ids, so a process name cannot collide with an id in the page.
+    doc.querySelectorAll("h1, h2, h3, h4").forEach((hd) => { hd.dataset.anchor = anchor(hd.textContent); });
+    doc.addEventListener("click", (e) => {
+      const a = e.target.closest('a[href^="#"]');
+      if (!a) return;
+      e.preventDefault();
+      const target = doc.querySelector(`[data-anchor="${CSS.escape(decodeURIComponent(a.getAttribute("href").slice(1)))}"]`);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    wrap.appendChild(doc);
+    els.reportView.appendChild(wrap);
+    els.reportView.scrollTop = 0;
+  }
+
+  const saveFile = (name, type, text) => {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement("a"); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  async function downloadReport() {
+    const r = state.report;
+    if (!r) return;
+    if (r.mode === "detailed") {
+      if (r.markdown) saveFile(`${r.repo}-temporal-report-detailed.md`, "text/markdown;charset=utf-8", r.markdown);
+      return;
+    }
+    // The summary as one self-contained page: the rendered report with the app's styles inlined.
+    const report = els.reportView.querySelector(".report");
+    if (!report) return;
+    let css = "";
+    try { css = await (await fetch("style.css")).text(); } catch { /* the page still reads without styles */ }
+    const clone = report.cloneNode(true);
+    clone.querySelectorAll(".opp-actions").forEach((el) => el.remove());  // buttons that only work in the app
+    const title = `Temporal report: ${r.repo}`.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]);
+    saveFile(`${r.repo}-temporal-report.html`, "text/html;charset=utf-8", `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>${css}
+body { display: block; height: auto; }
+</style>
+</head>
+<body>
+${clone.outerHTML}
+</body>
+</html>
+`);
   }
 
   // ---- chat ----
@@ -368,6 +484,9 @@
     if (state.view === "report") { showChat(); renderMessages(); renderComposer(); }
     else if (!state.streaming) showReport();
   });
+  els.reportSummary.addEventListener("click", () => { if (state.report?.mode !== "summary") showReportMode("summary"); });
+  els.reportDetailed.addEventListener("click", () => { if (state.report?.mode !== "detailed") showReportMode("detailed"); });
+  els.reportDownload.addEventListener("click", downloadReport);
 
   els.repoSelect.addEventListener("change", () => {
     state.selected = els.repoSelect.value; saveSelected(state.selected);
