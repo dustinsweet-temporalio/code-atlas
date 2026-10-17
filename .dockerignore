@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/.venv
+**/node_modules
+repos/
+bedrock-gateway/
+docdb_proxy_agent/
+open-webui/
+deployment/
+docs/
+scripts/index_repositories.py

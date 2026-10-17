@@ -1,0 +1,40 @@
+.env
+.env.*
+!.env.example
+repos/
+.venv/
+venv/
+node_modules/
+.DS_Store
+Thumbs.db
+.bedrock_agentcore/
+
+# Generated output (never checked in)
+# Temporal reports written by scripts/report.sh
+reports/
+# Suggested target for `sync --output-dir`
+artifacts/
+coverage/
+dist/
+build/
+*.egg-info/
+*.log
+# Left by `uv run --with ...` test runs; the project installs with pip
+uv.lock
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Keep local credentials and deployment state out of the source distribution.
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.der
+*.jks
+*.keystore
+.bedrock_agentcore.yaml
